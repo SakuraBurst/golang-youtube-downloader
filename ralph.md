@@ -15,6 +15,21 @@ Build the command-line interface structure first, then implement YouTube functio
 
 **MANDATORY: All development MUST follow TDD (Test-Driven Development).**
 
+## Iteration Rules
+
+**ONE TASK PER ITERATION:**
+1. Pick ONE task from `bd ready`
+2. Complete it fully (TDD cycle)
+3. ALL tests must pass
+4. Commit and push
+5. Close the task
+6. Only THEN may you pick the next task
+
+**Do NOT:**
+- Work on multiple tasks simultaneously
+- Start a new task before completing current one
+- Commit with failing tests
+
 ## Technical Requirements
 - Go 1.21+
 - Use cobra for CLI framework
@@ -51,15 +66,19 @@ golangci-lint run ./...
 
 ## Task Workflow
 
+**CRITICAL: Work on exactly ONE task per iteration. Do not start another task until the current one is completed, committed, and pushed.**
+
 ### 1. Check Available Tasks
 ```bash
 bd ready
 ```
+Pick ONE task to work on.
 
 ### 2. Claim Task
 ```bash
 bd update <id> --status in_progress
 ```
+**Only ONE task may be in_progress at a time.**
 
 ### 3. Work on Task (TDD Cycle)
 - Write failing test
