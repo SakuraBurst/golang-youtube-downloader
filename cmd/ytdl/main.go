@@ -1,5 +1,11 @@
 package main
 
+import (
+	"os"
+)
+
 func main() {
-	// Entry point - to be implemented with CLI
+	if err := newRootCmd().Execute(); err != nil {
+		os.Exit(1)
+	}
 }
