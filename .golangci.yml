@@ -1,6 +1,17 @@
+version: "2"
+
 run:
   timeout: 5m
   modules-download-mode: readonly
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/SakuraBurst/golang-youtube-downloader
 
 linters:
   enable:
@@ -9,32 +20,22 @@ linters:
     - ineffassign
     - staticcheck
     - unused
-    - gosimple
     - gocritic
-    - gofmt
-    - goimports
     - misspell
     - unconvert
-    - unparam
     - nakedret
     - prealloc
-    - exportloopref
     - whitespace
-
-linters-settings:
-  govet:
-    check-shadowing: true
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - style
-      - performance
-  goimports:
-    local-prefixes: github.com/SakuraBurst/golang-youtube-downloader
-  misspell:
-    locale: US
-  nakedret:
-    max-func-lines: 30
+  settings:
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+    misspell:
+      locale: US
+    nakedret:
+      max-func-lines: 30
 
 issues:
   exclude-use-default: false
