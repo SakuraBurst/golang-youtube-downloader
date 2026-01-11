@@ -6,11 +6,11 @@ You are developing **golang-youtube-downloader** - a Go port of [YoutubeDownload
 This is a CLI application for downloading YouTube videos, playlists, and channel content.
 
 ## Reference Source Code
-The original C# project is cloned at `/tmp/YoutubeDownloader/`.
+The original C# project is cloned at `C:/Users/colap/AppData/Local/Temp/YoutubeDownloader`.
 **You MUST study the source code** when implementing features:
 
 ```
-/tmp/YoutubeDownloader/
+C:/Users/colap/AppData/Local/Temp/YoutubeDownloader/
 ├── YoutubeDownloader.Core/
 │   ├── Resolving/      # URL parsing, query resolution
 │   ├── Downloading/    # Stream resolution, download logic
@@ -20,14 +20,14 @@ The original C# project is cloned at `/tmp/YoutubeDownloader/`.
 ```
 
 **Before implementing any task:**
-1. Read the corresponding source files in `/tmp/YoutubeDownloader/`
+1. Read the corresponding source files in `C:/Users/colap/AppData/Local/Temp/YoutubeDownloader`
 2. Understand the data structures and algorithms
 3. Port the logic to idiomatic Go
 
 ## Current State
 - Repository initialized
 - Beads task tracking configured with epics and sub-tasks
-- Reference source code available at `/tmp/YoutubeDownloader/`
+- Reference source code available at `C:/Users/colap/AppData/Local/Temp/YoutubeDownloader`
 
 ## Development Approach: TDD
 **MANDATORY: All development MUST follow TDD (Test-Driven Development).**
@@ -97,9 +97,9 @@ Example:
 
 ### 2. Study Reference Code
 Before coding, read the relevant source files:
-- URL parsing → `/tmp/YoutubeDownloader/YoutubeDownloader.Core/Resolving/`
-- Stream resolution → `/tmp/YoutubeDownloader/YoutubeDownloader.Core/Downloading/`
-- Metadata → `/tmp/YoutubeDownloader/YoutubeDownloader.Core/Tagging/`
+- URL parsing → `C:/Users/colap/AppData/Local/Temp/YoutubeDownloader/YoutubeDownloader.Core/Resolving/`
+- Stream resolution → `C:/Users/colap/AppData/Local/Temp/YoutubeDownloader/YoutubeDownloader.Core/Downloading/`
+- Metadata → `C:/Users/colap/AppData/Local/Temp/YoutubeDownloader/YoutubeDownloader.Core/Tagging/`
 
 ### 3. Claim Task
 ```bash
