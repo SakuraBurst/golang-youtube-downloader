@@ -81,7 +81,19 @@ golangci-lint run ./...
 ```bash
 bd ready
 ```
-Pick ONE task. Read its description.
+
+**IMPORTANT: Pick ONE TASK, not an epic!**
+- Tasks are marked as `[task]`, epics as `[epic]`
+- Only tasks with **no blockers** are shown (dependencies resolved)
+- Pick the **highest priority** task (P0 > P1 > P2)
+- Use `bd show <id>` to see task details and what it blocks
+
+Example:
+```
+📋 Ready work:
+1. [● P0] [epic] 9du: Project Foundation      ← SKIP (epic)
+2. [● P0] [task] 9du.1: Initialize Go module  ← PICK THIS (task)
+```
 
 ### 2. Study Reference Code
 Before coding, read the relevant source files:
