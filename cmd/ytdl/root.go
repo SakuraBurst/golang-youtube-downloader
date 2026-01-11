@@ -16,5 +16,8 @@ It supports downloading videos in various formats and qualities.`,
 			_ = cmd.Help()
 		},
 	}
+
+	cmd.AddCommand(newVersionCmd())
+
 	return cmd
 }
