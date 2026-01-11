@@ -5,25 +5,43 @@ You are developing **golang-youtube-downloader** - a Go port of [YoutubeDownload
 
 This is a CLI application for downloading YouTube videos, playlists, and channel content.
 
+## Reference Source Code
+The original C# project is cloned at `/tmp/YoutubeDownloader/`.
+**You MUST study the source code** when implementing features:
+
+```
+/tmp/YoutubeDownloader/
+├── YoutubeDownloader.Core/
+│   ├── Resolving/      # URL parsing, query resolution
+│   ├── Downloading/    # Stream resolution, download logic
+│   ├── Tagging/        # Metadata injection
+│   └── Utils/          # HTTP client, helpers
+└── YoutubeDownloader/  # UI (ignore for CLI port)
+```
+
+**Before implementing any task:**
+1. Read the corresponding source files in `/tmp/YoutubeDownloader/`
+2. Understand the data structures and algorithms
+3. Port the logic to idiomatic Go
+
 ## Current State
-- Repository initialized with README.md
-- Beads task tracking configured
-- No code written yet - greenfield project
+- Repository initialized
+- Beads task tracking configured with epics and sub-tasks
+- Reference source code available at `/tmp/YoutubeDownloader/`
 
-## Development Approach: CLI First + TDD
-Build the command-line interface structure first, then implement YouTube functionality.
-
+## Development Approach: TDD
 **MANDATORY: All development MUST follow TDD (Test-Driven Development).**
 
 ## Iteration Rules
 
 **ONE TASK PER ITERATION:**
-1. Pick ONE task from `bd ready`
-2. Complete it fully (TDD cycle)
-3. ALL tests must pass
-4. Commit and push
-5. Close the task
-6. Only THEN may you pick the next task
+1. Run `bd ready` - pick ONE task
+2. Read reference source code for context
+3. Complete task fully using TDD cycle
+4. ALL tests must pass
+5. Commit and push
+6. Close the task with `bd close`
+7. Only THEN may you pick the next task
 
 **Do NOT:**
 - Work on multiple tasks simultaneously
@@ -38,65 +56,60 @@ Build the command-line interface structure first, then implement YouTube functio
 
 ## TDD Workflow (MANDATORY)
 
-For EVERY piece of functionality, follow this cycle strictly:
+For EVERY piece of functionality:
 
 ### 1. RED - Write Failing Test First
 ```bash
-# Write test that defines expected behavior
-# Run test - it MUST fail
-go test ./...
+go test ./...  # MUST fail
 ```
 **Do NOT write implementation code until you have a failing test.**
 
 ### 2. GREEN - Write Minimal Code to Pass
 ```bash
-# Write ONLY enough code to make the test pass
-go test ./...
+go test ./...  # MUST pass
 ```
-**The test MUST pass before proceeding.**
 
 ### 3. REFACTOR - Improve Code Quality
 ```bash
-# Clean up code while keeping tests green
 go test ./...
 golangci-lint run ./...
 ```
 
-**Repeat this cycle for every feature, function, and component.**
-
 ## Task Workflow
-
-**CRITICAL: Work on exactly ONE task per iteration. Do not start another task until the current one is completed, committed, and pushed.**
 
 ### 1. Check Available Tasks
 ```bash
 bd ready
 ```
-Pick ONE task to work on.
+Pick ONE task. Read its description.
 
-### 2. Claim Task
+### 2. Study Reference Code
+Before coding, read the relevant source files:
+- URL parsing → `/tmp/YoutubeDownloader/YoutubeDownloader.Core/Resolving/`
+- Stream resolution → `/tmp/YoutubeDownloader/YoutubeDownloader.Core/Downloading/`
+- Metadata → `/tmp/YoutubeDownloader/YoutubeDownloader.Core/Tagging/`
+
+### 3. Claim Task
 ```bash
 bd update <id> --status in_progress
 ```
 **Only ONE task may be in_progress at a time.**
 
-### 3. Work on Task (TDD Cycle)
+### 4. Work on Task (TDD Cycle)
 - Write failing test
-- Implement minimal code
+- Implement minimal code (port from reference)
 - Refactor
 - Repeat until task complete
 
-### 4. Before Closing Task - Run ALL Quality Gates
+### 5. Run ALL Quality Gates
 ```bash
 go build ./...
 go test ./...
 golangci-lint run ./...
 ```
 
-### 5. Commit and Push (ONLY IF ALL TESTS PASS)
-**CRITICAL: You may ONLY commit and push if ALL tests pass.**
+### 6. Commit and Push (ONLY IF ALL TESTS PASS)
 ```bash
-# Verify ALL tests pass
 go test ./...
 
 # If and ONLY if all tests pass:
@@ -107,15 +120,10 @@ git push
 
 **If ANY test fails - DO NOT commit. Fix the issue first.**
 
-### 6. Close Task
+### 7. Close Task
 ```bash
 bd close <id> --reason "Completed"
 bd sync
-```
-
-### 7. Create New Tasks as Discovered
-```bash
-bd create "Task title" -p 1
 ```
 
 ## Quality Gates (MUST ALL PASS before commit)
@@ -128,31 +136,35 @@ bd create "Task title" -p 1
 - **NEVER push with failing tests**
 - Commit after EACH completed task
 - Push after EACH successful commit
-- Include Beads task ID in commit message
+- Include Beads task ID in commit message (e.g., `bd-9du.1`)
 
-## Current Phase: CLI Foundation
+## Epic Structure
 
-### Phase 1 Completion Criteria
-- [ ] Go module initialized (go.mod)
-- [ ] cobra CLI framework integrated
-- [ ] Basic command structure: `download`, `info`, `version`
-- [ ] Help text for all commands
-- [ ] Tests for CLI argument parsing (written FIRST per TDD)
+Tasks are organized into epics. Work through tasks in priority order (P0 first):
 
-### Phase 1 Deliverables
-1. `cmd/` - CLI entry points
-2. `internal/cli/` - Command implementations
-3. `go.mod`, `go.sum` - Dependencies
-4. Comprehensive test coverage (TDD)
+**P0 - Foundation:**
+- `9du` - Project Foundation
+- `33f` - CLI Interface
+- `ocv` - YouTube URL Parsing
+- `1vd` - Video Info Fetching
+- `nao` - Stream Resolution
+
+**P1 - Core Features:**
+- `ad3` - Download Engine
+- `71n` - Playlist Support
+
+**P2 - Enhancements:**
+- `tb4` - Metadata Tagging
+- `pv5` - Subtitles Support
 
 ## Completion Signal
-When ALL Phase 1 criteria are met and ALL quality gates pass, output:
-<promise>PHASE_COMPLETE</promise>
+When the current epic is complete (all sub-tasks done), output:
+<promise>EPIC_COMPLETE</promise>
 
 ## Landing the Plane
 Before signaling completion:
 1. Verify ALL tests pass: `go test ./...`
 2. Run all quality gates
-3. Update/close all Beads tasks
+3. Close all completed Beads tasks
 4. Final commit and push (only if tests pass)
 5. Run `bd sync`
