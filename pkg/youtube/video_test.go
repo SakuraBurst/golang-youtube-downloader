@@ -131,3 +131,218 @@ func TestVideo_DurationString_Short(t *testing.T) {
 		t.Errorf("expected '3:05', got %q", str)
 	}
 }
+
+func TestPlayerResponse_ToVideo_Basic(t *testing.T) {
+	pr := &PlayerResponse{
+		VideoDetails: VideoDetailsResponse{
+			VideoID:          "dQw4w9WgXcQ",
+			Title:            "Never Gonna Give You Up",
+			Author:           "Rick Astley",
+			ChannelID:        "UCuAXFkgsw1L7xaCfnd5JJOw",
+			LengthSeconds:    "213",
+			ViewCount:        "1500000000",
+			ShortDescription: "The official video for Never Gonna Give You Up",
+			Keywords:         []string{"rick", "astley", "never", "gonna"},
+			IsLiveContent:    false,
+			IsPrivate:        false,
+		},
+		PlayabilityStatus: PlayabilityStatusResponse{
+			Status: "OK",
+		},
+	}
+
+	video, err := pr.ToVideo()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if video.ID != "dQw4w9WgXcQ" {
+		t.Errorf("expected ID %q, got %q", "dQw4w9WgXcQ", video.ID)
+	}
+	if video.Title != "Never Gonna Give You Up" {
+		t.Errorf("expected Title %q, got %q", "Never Gonna Give You Up", video.Title)
+	}
+	if video.Author.Name != "Rick Astley" {
+		t.Errorf("expected Author.Name %q, got %q", "Rick Astley", video.Author.Name)
+	}
+	if video.Author.ChannelID != "UCuAXFkgsw1L7xaCfnd5JJOw" {
+		t.Errorf("expected Author.ChannelID %q, got %q", "UCuAXFkgsw1L7xaCfnd5JJOw", video.Author.ChannelID)
+	}
+	if video.Duration != 213*time.Second {
+		t.Errorf("expected Duration %v, got %v", 213*time.Second, video.Duration)
+	}
+	if video.ViewCount != 1500000000 {
+		t.Errorf("expected ViewCount %d, got %d", int64(1500000000), video.ViewCount)
+	}
+	if video.Description != "The official video for Never Gonna Give You Up" {
+		t.Errorf("expected Description %q, got %q", "The official video for Never Gonna Give You Up", video.Description)
+	}
+	if len(video.Keywords) != 4 {
+		t.Errorf("expected 4 keywords, got %d", len(video.Keywords))
+	}
+	if video.IsLive != false {
+		t.Error("expected IsLive to be false")
+	}
+	if video.IsPrivate != false {
+		t.Error("expected IsPrivate to be false")
+	}
+}
+
+func TestPlayerResponse_ToVideo_WithThumbnails(t *testing.T) {
+	pr := &PlayerResponse{
+		VideoDetails: VideoDetailsResponse{
+			VideoID:       "dQw4w9WgXcQ",
+			Title:         "Test Video",
+			Author:        "Test Author",
+			ChannelID:     "UC123",
+			LengthSeconds: "100",
+			ViewCount:     "1000",
+		},
+		PlayabilityStatus: PlayabilityStatusResponse{
+			Status: "OK",
+		},
+	}
+	pr.VideoDetails.Thumbnail.Thumbnails = []ThumbnailResponse{
+		{URL: "https://i.ytimg.com/vi/dQw4w9WgXcQ/default.jpg", Width: 120, Height: 90},
+		{URL: "https://i.ytimg.com/vi/dQw4w9WgXcQ/maxresdefault.jpg", Width: 1280, Height: 720},
+	}
+
+	video, err := pr.ToVideo()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(video.Thumbnails) != 2 {
+		t.Errorf("expected 2 thumbnails, got %d", len(video.Thumbnails))
+	}
+	if video.Thumbnails[0].Width != 120 {
+		t.Errorf("expected first thumbnail width 120, got %d", video.Thumbnails[0].Width)
+	}
+	if video.Thumbnails[1].Width != 1280 {
+		t.Errorf("expected second thumbnail width 1280, got %d", video.Thumbnails[1].Width)
+	}
+}
+
+func TestPlayerResponse_ToVideo_InvalidDuration(t *testing.T) {
+	pr := &PlayerResponse{
+		VideoDetails: VideoDetailsResponse{
+			VideoID:       "dQw4w9WgXcQ",
+			Title:         "Test Video",
+			Author:        "Test Author",
+			ChannelID:     "UC123",
+			LengthSeconds: "invalid",
+			ViewCount:     "1000",
+		},
+		PlayabilityStatus: PlayabilityStatusResponse{
+			Status: "OK",
+		},
+	}
+
+	_, err := pr.ToVideo()
+	if err == nil {
+		t.Error("expected error for invalid duration")
+	}
+}
+
+func TestPlayerResponse_ToVideo_InvalidViewCount(t *testing.T) {
+	pr := &PlayerResponse{
+		VideoDetails: VideoDetailsResponse{
+			VideoID:       "dQw4w9WgXcQ",
+			Title:         "Test Video",
+			Author:        "Test Author",
+			ChannelID:     "UC123",
+			LengthSeconds: "100",
+			ViewCount:     "invalid",
+		},
+		PlayabilityStatus: PlayabilityStatusResponse{
+			Status: "OK",
+		},
+	}
+
+	// Empty or invalid view count should default to 0, not error
+	video, err := pr.ToVideo()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if video.ViewCount != 0 {
+		t.Errorf("expected ViewCount 0 for invalid value, got %d", video.ViewCount)
+	}
+}
+
+func TestPlayerResponse_ToVideo_LiveVideo(t *testing.T) {
+	pr := &PlayerResponse{
+		VideoDetails: VideoDetailsResponse{
+			VideoID:       "live123",
+			Title:         "Live Stream",
+			Author:        "Streamer",
+			ChannelID:     "UC123",
+			LengthSeconds: "0",
+			ViewCount:     "5000",
+			IsLiveContent: true,
+		},
+		PlayabilityStatus: PlayabilityStatusResponse{
+			Status: "OK",
+		},
+	}
+
+	video, err := pr.ToVideo()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !video.IsLive {
+		t.Error("expected IsLive to be true")
+	}
+}
+
+func TestPlayerResponse_ToVideo_PrivateVideo(t *testing.T) {
+	pr := &PlayerResponse{
+		VideoDetails: VideoDetailsResponse{
+			VideoID:       "private123",
+			Title:         "Private Video",
+			Author:        "Author",
+			ChannelID:     "UC123",
+			LengthSeconds: "60",
+			ViewCount:     "0",
+			IsPrivate:     true,
+		},
+		PlayabilityStatus: PlayabilityStatusResponse{
+			Status: "OK",
+		},
+	}
+
+	video, err := pr.ToVideo()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !video.IsPrivate {
+		t.Error("expected IsPrivate to be true")
+	}
+}
+
+func TestPlayerResponse_ToVideo_AuthorURL(t *testing.T) {
+	pr := &PlayerResponse{
+		VideoDetails: VideoDetailsResponse{
+			VideoID:       "test123",
+			Title:         "Test",
+			Author:        "Author",
+			ChannelID:     "UCuAXFkgsw1L7xaCfnd5JJOw",
+			LengthSeconds: "60",
+			ViewCount:     "100",
+		},
+		PlayabilityStatus: PlayabilityStatusResponse{
+			Status: "OK",
+		},
+	}
+
+	video, err := pr.ToVideo()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expectedURL := "https://www.youtube.com/channel/UCuAXFkgsw1L7xaCfnd5JJOw"
+	if video.Author.URL != expectedURL {
+		t.Errorf("expected Author.URL %q, got %q", expectedURL, video.Author.URL)
+	}
+}

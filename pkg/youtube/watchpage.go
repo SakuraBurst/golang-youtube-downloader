@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strconv"
+	"time"
 )
 
 const (
@@ -174,6 +176,46 @@ type FormatResponse struct {
 
 // ErrPlayerResponseNotFound is returned when ytInitialPlayerResponse is not found in the page.
 var ErrPlayerResponseNotFound = errors.New("ytInitialPlayerResponse not found in page")
+
+// ToVideo converts the PlayerResponse to a Video struct.
+func (pr *PlayerResponse) ToVideo() (*Video, error) {
+	vd := pr.VideoDetails
+
+	// Parse duration
+	durationSeconds, err := strconv.ParseInt(vd.LengthSeconds, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("parsing duration: %w", err)
+	}
+
+	// Parse view count (ignore errors, default to 0)
+	viewCount, _ := strconv.ParseInt(vd.ViewCount, 10, 64)
+
+	// Convert thumbnails
+	thumbnails := make([]Thumbnail, len(vd.Thumbnail.Thumbnails))
+	for i, t := range vd.Thumbnail.Thumbnails {
+		thumbnails[i] = Thumbnail(t)
+	}
+
+	// Build channel URL
+	channelURL := fmt.Sprintf("%s/channel/%s", youtubeBaseURL, vd.ChannelID)
+
+	return &Video{
+		ID:          vd.VideoID,
+		Title:       vd.Title,
+		Description: vd.ShortDescription,
+		Duration:    time.Duration(durationSeconds) * time.Second,
+		ViewCount:   viewCount,
+		Keywords:    vd.Keywords,
+		Thumbnails:  thumbnails,
+		IsLive:      vd.IsLiveContent,
+		IsPrivate:   vd.IsPrivate,
+		Author: Author{
+			Name:      vd.Author,
+			ChannelID: vd.ChannelID,
+			URL:       channelURL,
+		},
+	}, nil
+}
 
 // ExtractPlayerResponse extracts and parses the ytInitialPlayerResponse JSON
 // from the watch page HTML.
