@@ -158,3 +158,114 @@ func (m *StreamManifest) GetBestAudioStream() *AudioStreamInfo {
 	}
 	return best
 }
+
+// DownloadOption represents a single download option combining video and/or audio streams.
+type DownloadOption struct {
+	// Container is the output container format.
+	Container Container
+
+	// IsAudioOnly indicates if this option extracts audio only.
+	IsAudioOnly bool
+
+	// VideoStream is the video stream for this option (nil for audio-only).
+	VideoStream *VideoStreamInfo
+
+	// AudioStream is the audio stream for this option.
+	AudioStream *AudioStreamInfo
+}
+
+// QualityLabel returns a human-readable label for this download option.
+func (o *DownloadOption) QualityLabel() string {
+	if o.IsAudioOnly {
+		return "Audio"
+	}
+	if o.VideoStream != nil {
+		if o.VideoStream.Quality != "" {
+			return o.VideoStream.Quality
+		}
+		return QualityLabel(o.VideoStream.Height)
+	}
+	return ""
+}
+
+// GetDownloadOptions generates all available download options from the stream manifest.
+// It creates video+audio combinations and audio-only options.
+func (m *StreamManifest) GetDownloadOptions() []DownloadOption {
+	var options []DownloadOption
+
+	// Find the best audio stream for each container type
+	bestAudioMP4 := m.findBestAudioByContainer(ContainerMP4)
+	bestAudioWebM := m.findBestAudioByContainer(ContainerWebM)
+
+	// Generate video+audio options from adaptive formats
+	for i := range m.VideoStreams {
+		vs := &m.VideoStreams[i]
+
+		// Find compatible audio stream (prefer same container)
+		var audioStream *AudioStreamInfo
+		switch {
+		case vs.Container == ContainerMP4 && bestAudioMP4 != nil:
+			audioStream = bestAudioMP4
+		case vs.Container == ContainerWebM && bestAudioWebM != nil:
+			audioStream = bestAudioWebM
+		default:
+			// Fallback to any available audio
+			audioStream = m.GetBestAudioStream()
+		}
+
+		if audioStream != nil {
+			options = append(options, DownloadOption{
+				Container:   vs.Container,
+				IsAudioOnly: false,
+				VideoStream: vs,
+				AudioStream: audioStream,
+			})
+		} else {
+			// Video only if no audio available
+			options = append(options, DownloadOption{
+				Container:   vs.Container,
+				IsAudioOnly: false,
+				VideoStream: vs,
+				AudioStream: nil,
+			})
+		}
+	}
+
+	// Generate video+audio options from muxed streams
+	for i := range m.MuxedStreams {
+		ms := &m.MuxedStreams[i]
+		options = append(options, DownloadOption{
+			Container:   ms.VideoStreamInfo.Container,
+			IsAudioOnly: false,
+			VideoStream: &ms.VideoStreamInfo,
+			AudioStream: &ms.AudioStreamInfo,
+		})
+	}
+
+	// Generate audio-only options
+	for i := range m.AudioStreams {
+		as := &m.AudioStreams[i]
+		options = append(options, DownloadOption{
+			Container:   as.Container,
+			IsAudioOnly: true,
+			VideoStream: nil,
+			AudioStream: as,
+		})
+	}
+
+	return options
+}
+
+// findBestAudioByContainer finds the highest bitrate audio stream with the specified container.
+func (m *StreamManifest) findBestAudioByContainer(container Container) *AudioStreamInfo {
+	var best *AudioStreamInfo
+	for i := range m.AudioStreams {
+		as := &m.AudioStreams[i]
+		if as.Container == container {
+			if best == nil || as.Bitrate > best.Bitrate {
+				best = as
+			}
+		}
+	}
+	return best
+}

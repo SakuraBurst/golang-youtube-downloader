@@ -566,3 +566,179 @@ func TestSignatureCipher_BuildURL(t *testing.T) {
 		t.Errorf("expected URL %q, got %q", expected, url)
 	}
 }
+
+func TestDownloadOption_Basic(t *testing.T) {
+	opt := DownloadOption{
+		Container:   ContainerMP4,
+		IsAudioOnly: false,
+		VideoStream: &VideoStreamInfo{
+			StreamInfo: StreamInfo{Quality: "1080p", Bitrate: 5000000},
+			Width:      1920,
+			Height:     1080,
+		},
+		AudioStream: &AudioStreamInfo{
+			StreamInfo: StreamInfo{Quality: "AUDIO_QUALITY_MEDIUM", Bitrate: 128000},
+		},
+	}
+
+	if opt.Container != ContainerMP4 {
+		t.Errorf("expected container mp4, got %v", opt.Container)
+	}
+	if opt.IsAudioOnly {
+		t.Error("expected IsAudioOnly to be false")
+	}
+	if opt.VideoStream == nil {
+		t.Error("expected video stream to be set")
+	}
+	if opt.AudioStream == nil {
+		t.Error("expected audio stream to be set")
+	}
+}
+
+func TestDownloadOption_QualityLabel(t *testing.T) {
+	opt := DownloadOption{
+		Container:   ContainerMP4,
+		IsAudioOnly: false,
+		VideoStream: &VideoStreamInfo{
+			StreamInfo: StreamInfo{Quality: "1080p", Bitrate: 5000000},
+			Width:      1920,
+			Height:     1080,
+		},
+	}
+
+	label := opt.QualityLabel()
+	if label != "1080p" {
+		t.Errorf("expected quality label '1080p', got %q", label)
+	}
+}
+
+func TestDownloadOption_QualityLabel_AudioOnly(t *testing.T) {
+	opt := DownloadOption{
+		Container:   ContainerMP4,
+		IsAudioOnly: true,
+		AudioStream: &AudioStreamInfo{
+			StreamInfo: StreamInfo{Quality: "AUDIO_QUALITY_HIGH", Bitrate: 256000},
+		},
+	}
+
+	label := opt.QualityLabel()
+	if label != "Audio" {
+		t.Errorf("expected quality label 'Audio', got %q", label)
+	}
+}
+
+func TestStreamManifest_GetDownloadOptions_Basic(t *testing.T) {
+	manifest := &StreamManifest{
+		VideoStreams: []VideoStreamInfo{
+			{
+				StreamInfo: StreamInfo{URL: "https://example.com/v1080", Quality: "1080p", Bitrate: 5000000, Container: ContainerMP4},
+				Width:      1920,
+				Height:     1080,
+			},
+		},
+		AudioStreams: []AudioStreamInfo{
+			{
+				StreamInfo: StreamInfo{URL: "https://example.com/a128", Quality: "AUDIO_QUALITY_MEDIUM", Bitrate: 128000, Container: ContainerMP4},
+			},
+		},
+	}
+
+	options := manifest.GetDownloadOptions()
+	if len(options) == 0 {
+		t.Fatal("expected at least one download option")
+	}
+
+	// Should have video+audio options and audio-only options
+	hasVideoOption := false
+	hasAudioOnlyOption := false
+	for _, opt := range options {
+		if !opt.IsAudioOnly && opt.VideoStream != nil {
+			hasVideoOption = true
+		}
+		if opt.IsAudioOnly {
+			hasAudioOnlyOption = true
+		}
+	}
+
+	if !hasVideoOption {
+		t.Error("expected at least one video+audio download option")
+	}
+	if !hasAudioOnlyOption {
+		t.Error("expected at least one audio-only download option")
+	}
+}
+
+func TestStreamManifest_GetDownloadOptions_MuxedStreams(t *testing.T) {
+	manifest := &StreamManifest{
+		MuxedStreams: []MuxedStreamInfo{
+			{
+				VideoStreamInfo: VideoStreamInfo{
+					StreamInfo: StreamInfo{URL: "https://example.com/muxed", Quality: "360p", Bitrate: 500000, Container: ContainerMP4},
+					Width:      640,
+					Height:     360,
+				},
+				AudioStreamInfo: AudioStreamInfo{
+					AudioCodec: "mp4a.40.2",
+				},
+			},
+		},
+	}
+
+	options := manifest.GetDownloadOptions()
+	if len(options) == 0 {
+		t.Fatal("expected at least one download option from muxed streams")
+	}
+
+	// Check that we have an option from the muxed stream
+	foundMuxed := false
+	for _, opt := range options {
+		if opt.VideoStream != nil && opt.VideoStream.Height == 360 {
+			foundMuxed = true
+			break
+		}
+	}
+	if !foundMuxed {
+		t.Error("expected to find muxed stream download option")
+	}
+}
+
+func TestStreamManifest_GetDownloadOptions_MultipleQualities(t *testing.T) {
+	manifest := &StreamManifest{
+		VideoStreams: []VideoStreamInfo{
+			{StreamInfo: StreamInfo{URL: "https://example.com/v1080", Quality: "1080p", Bitrate: 5000000, Container: ContainerMP4}, Width: 1920, Height: 1080},
+			{StreamInfo: StreamInfo{URL: "https://example.com/v720", Quality: "720p", Bitrate: 2500000, Container: ContainerMP4}, Width: 1280, Height: 720},
+			{StreamInfo: StreamInfo{URL: "https://example.com/v480", Quality: "480p", Bitrate: 1000000, Container: ContainerMP4}, Width: 854, Height: 480},
+		},
+		AudioStreams: []AudioStreamInfo{
+			{StreamInfo: StreamInfo{URL: "https://example.com/a128", Quality: "AUDIO_QUALITY_MEDIUM", Bitrate: 128000, Container: ContainerMP4}},
+		},
+	}
+
+	options := manifest.GetDownloadOptions()
+
+	// Count video options (excluding audio-only)
+	videoOptionCount := 0
+	for _, opt := range options {
+		if !opt.IsAudioOnly && opt.VideoStream != nil {
+			videoOptionCount++
+		}
+	}
+
+	// Should have at least one option per video quality
+	if videoOptionCount < 3 {
+		t.Errorf("expected at least 3 video quality options, got %d", videoOptionCount)
+	}
+}
+
+func TestStreamManifest_GetDownloadOptions_Empty(t *testing.T) {
+	manifest := &StreamManifest{
+		VideoStreams: []VideoStreamInfo{},
+		AudioStreams: []AudioStreamInfo{},
+		MuxedStreams: []MuxedStreamInfo{},
+	}
+
+	options := manifest.GetDownloadOptions()
+	if len(options) != 0 {
+		t.Errorf("expected 0 options for empty manifest, got %d", len(options))
+	}
+}
