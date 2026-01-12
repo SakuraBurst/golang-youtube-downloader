@@ -269,3 +269,156 @@ func (m *StreamManifest) findBestAudioByContainer(container Container) *AudioStr
 	}
 	return best
 }
+
+// VideoQualityPreference represents the user's quality preference for video downloads.
+type VideoQualityPreference int
+
+// Quality preference constants.
+const (
+	QualityLowest VideoQualityPreference = iota
+	QualityUpTo360p
+	QualityUpTo480p
+	QualityUpTo720p
+	QualityUpTo1080p
+	QualityHighest
+)
+
+// String returns a human-readable display name for the quality preference.
+func (p VideoQualityPreference) String() string {
+	switch p {
+	case QualityLowest:
+		return "Lowest quality"
+	case QualityUpTo360p:
+		return "≤ 360p"
+	case QualityUpTo480p:
+		return "≤ 480p"
+	case QualityUpTo720p:
+		return "≤ 720p"
+	case QualityUpTo1080p:
+		return "≤ 1080p"
+	case QualityHighest:
+		return "Highest quality"
+	default:
+		return "Unknown"
+	}
+}
+
+// MaxHeight returns the maximum video height for this preference.
+// Returns 0 for QualityLowest (meaning select lowest) and QualityHighest (meaning no limit).
+func (p VideoQualityPreference) MaxHeight() int {
+	switch p {
+	case QualityUpTo360p:
+		return 360
+	case QualityUpTo480p:
+		return 480
+	case QualityUpTo720p:
+		return 720
+	case QualityUpTo1080p:
+		return 1080
+	default:
+		return 0
+	}
+}
+
+// SelectBestOption selects the best download option based on quality and container preferences.
+// It returns nil if no suitable option is found.
+func SelectBestOption(options []DownloadOption, quality VideoQualityPreference, preferredContainer Container) *DownloadOption {
+	if len(options) == 0 {
+		return nil
+	}
+
+	// Filter to video options only (exclude audio-only)
+	var videoOptions []DownloadOption
+	for i := range options {
+		if !options[i].IsAudioOnly && options[i].VideoStream != nil {
+			videoOptions = append(videoOptions, options[i])
+		}
+	}
+
+	if len(videoOptions) == 0 {
+		return nil
+	}
+
+	// Apply quality filter
+	maxHeight := quality.MaxHeight()
+	var filteredOptions []DownloadOption
+
+	switch quality {
+	case QualityLowest:
+		// For lowest quality, find the minimum height
+		minHeight := videoOptions[0].VideoStream.Height
+		for i := range videoOptions {
+			if videoOptions[i].VideoStream.Height < minHeight {
+				minHeight = videoOptions[i].VideoStream.Height
+			}
+		}
+		for i := range videoOptions {
+			if videoOptions[i].VideoStream.Height == minHeight {
+				filteredOptions = append(filteredOptions, videoOptions[i])
+			}
+		}
+	case QualityHighest:
+		// For highest quality, find the maximum height
+		maxHeightFound := 0
+		for i := range videoOptions {
+			if videoOptions[i].VideoStream.Height > maxHeightFound {
+				maxHeightFound = videoOptions[i].VideoStream.Height
+			}
+		}
+		for i := range videoOptions {
+			if videoOptions[i].VideoStream.Height == maxHeightFound {
+				filteredOptions = append(filteredOptions, videoOptions[i])
+			}
+		}
+	default:
+		// For UpToXXXp, filter by max height and find the highest within limit
+		var withinLimit []DownloadOption
+		for i := range videoOptions {
+			if videoOptions[i].VideoStream.Height <= maxHeight {
+				withinLimit = append(withinLimit, videoOptions[i])
+			}
+		}
+
+		if len(withinLimit) == 0 {
+			// If nothing within limit, use the lowest available
+			minHeight := videoOptions[0].VideoStream.Height
+			for i := range videoOptions {
+				if videoOptions[i].VideoStream.Height < minHeight {
+					minHeight = videoOptions[i].VideoStream.Height
+				}
+			}
+			for i := range videoOptions {
+				if videoOptions[i].VideoStream.Height == minHeight {
+					filteredOptions = append(filteredOptions, videoOptions[i])
+				}
+			}
+		} else {
+			// Find highest within limit
+			maxHeightWithin := 0
+			for i := range withinLimit {
+				if withinLimit[i].VideoStream.Height > maxHeightWithin {
+					maxHeightWithin = withinLimit[i].VideoStream.Height
+				}
+			}
+			for i := range withinLimit {
+				if withinLimit[i].VideoStream.Height == maxHeightWithin {
+					filteredOptions = append(filteredOptions, withinLimit[i])
+				}
+			}
+		}
+	}
+
+	if len(filteredOptions) == 0 {
+		return nil
+	}
+
+	// Prefer the specified container
+	for i := range filteredOptions {
+		if filteredOptions[i].Container == preferredContainer {
+			return &filteredOptions[i]
+		}
+	}
+
+	// Return first option if preferred container not found
+	return &filteredOptions[0]
+}

@@ -742,3 +742,148 @@ func TestStreamManifest_GetDownloadOptions_Empty(t *testing.T) {
 		t.Errorf("expected 0 options for empty manifest, got %d", len(options))
 	}
 }
+
+func TestVideoQualityPreference_String(t *testing.T) {
+	tests := []struct {
+		pref     VideoQualityPreference
+		expected string
+	}{
+		{QualityLowest, "Lowest quality"},
+		{QualityUpTo360p, "≤ 360p"},
+		{QualityUpTo480p, "≤ 480p"},
+		{QualityUpTo720p, "≤ 720p"},
+		{QualityUpTo1080p, "≤ 1080p"},
+		{QualityHighest, "Highest quality"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.expected, func(t *testing.T) {
+			got := tt.pref.String()
+			if got != tt.expected {
+				t.Errorf("expected %q, got %q", tt.expected, got)
+			}
+		})
+	}
+}
+
+func TestVideoQualityPreference_MaxHeight(t *testing.T) {
+	tests := []struct {
+		pref      VideoQualityPreference
+		maxHeight int
+	}{
+		{QualityLowest, 0},
+		{QualityUpTo360p, 360},
+		{QualityUpTo480p, 480},
+		{QualityUpTo720p, 720},
+		{QualityUpTo1080p, 1080},
+		{QualityHighest, 0}, // 0 means no limit
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.pref.String(), func(t *testing.T) {
+			got := tt.pref.MaxHeight()
+			if got != tt.maxHeight {
+				t.Errorf("expected max height %d, got %d", tt.maxHeight, got)
+			}
+		})
+	}
+}
+
+func TestSelectBestOption_Highest(t *testing.T) {
+	options := []DownloadOption{
+		{Container: ContainerMP4, VideoStream: &VideoStreamInfo{StreamInfo: StreamInfo{Quality: "360p"}, Height: 360}},
+		{Container: ContainerMP4, VideoStream: &VideoStreamInfo{StreamInfo: StreamInfo{Quality: "720p"}, Height: 720}},
+		{Container: ContainerMP4, VideoStream: &VideoStreamInfo{StreamInfo: StreamInfo{Quality: "1080p"}, Height: 1080}},
+	}
+
+	best := SelectBestOption(options, QualityHighest, ContainerMP4)
+	if best == nil {
+		t.Fatal("expected to find a best option")
+	}
+	if best.VideoStream.Height != 1080 {
+		t.Errorf("expected highest quality (1080p), got %dp", best.VideoStream.Height)
+	}
+}
+
+func TestSelectBestOption_Lowest(t *testing.T) {
+	options := []DownloadOption{
+		{Container: ContainerMP4, VideoStream: &VideoStreamInfo{StreamInfo: StreamInfo{Quality: "360p"}, Height: 360}},
+		{Container: ContainerMP4, VideoStream: &VideoStreamInfo{StreamInfo: StreamInfo{Quality: "720p"}, Height: 720}},
+		{Container: ContainerMP4, VideoStream: &VideoStreamInfo{StreamInfo: StreamInfo{Quality: "1080p"}, Height: 1080}},
+	}
+
+	best := SelectBestOption(options, QualityLowest, ContainerMP4)
+	if best == nil {
+		t.Fatal("expected to find a best option")
+	}
+	if best.VideoStream.Height != 360 {
+		t.Errorf("expected lowest quality (360p), got %dp", best.VideoStream.Height)
+	}
+}
+
+func TestSelectBestOption_UpTo720p(t *testing.T) {
+	options := []DownloadOption{
+		{Container: ContainerMP4, VideoStream: &VideoStreamInfo{StreamInfo: StreamInfo{Quality: "360p"}, Height: 360}},
+		{Container: ContainerMP4, VideoStream: &VideoStreamInfo{StreamInfo: StreamInfo{Quality: "720p"}, Height: 720}},
+		{Container: ContainerMP4, VideoStream: &VideoStreamInfo{StreamInfo: StreamInfo{Quality: "1080p"}, Height: 1080}},
+		{Container: ContainerMP4, VideoStream: &VideoStreamInfo{StreamInfo: StreamInfo{Quality: "4K"}, Height: 2160}},
+	}
+
+	best := SelectBestOption(options, QualityUpTo720p, ContainerMP4)
+	if best == nil {
+		t.Fatal("expected to find a best option")
+	}
+	// Should select 720p (highest within limit)
+	if best.VideoStream.Height != 720 {
+		t.Errorf("expected 720p (highest within limit), got %dp", best.VideoStream.Height)
+	}
+}
+
+func TestSelectBestOption_ContainerPreference(t *testing.T) {
+	options := []DownloadOption{
+		{Container: ContainerMP4, VideoStream: &VideoStreamInfo{StreamInfo: StreamInfo{Quality: "1080p"}, Height: 1080}},
+		{Container: ContainerWebM, VideoStream: &VideoStreamInfo{StreamInfo: StreamInfo{Quality: "1080p"}, Height: 1080}},
+	}
+
+	// Prefer MP4
+	best := SelectBestOption(options, QualityHighest, ContainerMP4)
+	if best == nil {
+		t.Fatal("expected to find a best option")
+	}
+	if best.Container != ContainerMP4 {
+		t.Errorf("expected MP4 container, got %s", best.Container)
+	}
+
+	// Prefer WebM
+	best = SelectBestOption(options, QualityHighest, ContainerWebM)
+	if best == nil {
+		t.Fatal("expected to find a best option")
+	}
+	if best.Container != ContainerWebM {
+		t.Errorf("expected WebM container, got %s", best.Container)
+	}
+}
+
+func TestSelectBestOption_NoOptions(t *testing.T) {
+	var options []DownloadOption
+
+	best := SelectBestOption(options, QualityHighest, ContainerMP4)
+	if best != nil {
+		t.Error("expected nil for empty options")
+	}
+}
+
+func TestSelectBestOption_AudioOnlyExcluded(t *testing.T) {
+	options := []DownloadOption{
+		{Container: ContainerMP4, IsAudioOnly: true, AudioStream: &AudioStreamInfo{StreamInfo: StreamInfo{Bitrate: 128000}}},
+		{Container: ContainerMP4, VideoStream: &VideoStreamInfo{StreamInfo: StreamInfo{Quality: "720p"}, Height: 720}},
+	}
+
+	best := SelectBestOption(options, QualityHighest, ContainerMP4)
+	if best == nil {
+		t.Fatal("expected to find a best option")
+	}
+	if best.IsAudioOnly {
+		t.Error("should not select audio-only option when selecting video quality")
+	}
+}
