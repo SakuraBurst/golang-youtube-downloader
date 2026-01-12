@@ -165,3 +165,144 @@ func TestVideoUnavailableError_Error(t *testing.T) {
 		t.Errorf("expected %q, got %q", expected, err.Error())
 	}
 }
+
+func TestWatchPage_ExtractPlayerResponse_Success(t *testing.T) {
+	// Sample HTML with ytInitialPlayerResponse embedded
+	html := `<!DOCTYPE html>
+<html>
+<head><title>Test Video</title></head>
+<body>
+<script>var ytInitialPlayerResponse = {"videoDetails":{"videoId":"dQw4w9WgXcQ","title":"Test Video","author":"Test Channel"},"playabilityStatus":{"status":"OK"}};</script>
+</body>
+</html>`
+
+	page := &WatchPage{
+		VideoID: "dQw4w9WgXcQ",
+		HTML:    html,
+	}
+
+	playerResponse, err := page.ExtractPlayerResponse()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if playerResponse == nil {
+		t.Fatal("expected player response to be non-nil")
+	}
+	if playerResponse.VideoDetails.VideoID != "dQw4w9WgXcQ" {
+		t.Errorf("expected videoId %q, got %q", "dQw4w9WgXcQ", playerResponse.VideoDetails.VideoID)
+	}
+	if playerResponse.VideoDetails.Title != "Test Video" {
+		t.Errorf("expected title %q, got %q", "Test Video", playerResponse.VideoDetails.Title)
+	}
+	if playerResponse.VideoDetails.Author != "Test Channel" {
+		t.Errorf("expected author %q, got %q", "Test Channel", playerResponse.VideoDetails.Author)
+	}
+}
+
+func TestWatchPage_ExtractPlayerResponse_WithWhitespace(t *testing.T) {
+	// ytInitialPlayerResponse with various whitespace patterns
+	html := `<!DOCTYPE html>
+<script>
+var   ytInitialPlayerResponse   =   {"videoDetails":{"videoId":"abc123XYZ90","title":"Whitespace Test"},"playabilityStatus":{"status":"OK"}}  ;
+</script>`
+
+	page := &WatchPage{
+		VideoID: "abc123XYZ90",
+		HTML:    html,
+	}
+
+	playerResponse, err := page.ExtractPlayerResponse()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if playerResponse.VideoDetails.VideoID != "abc123XYZ90" {
+		t.Errorf("expected videoId %q, got %q", "abc123XYZ90", playerResponse.VideoDetails.VideoID)
+	}
+}
+
+func TestWatchPage_ExtractPlayerResponse_NotFound(t *testing.T) {
+	// HTML without ytInitialPlayerResponse
+	html := `<!DOCTYPE html>
+<html>
+<head><title>Test Video</title></head>
+<body>
+<script>var someOtherVar = {};</script>
+</body>
+</html>`
+
+	page := &WatchPage{
+		VideoID: "dQw4w9WgXcQ",
+		HTML:    html,
+	}
+
+	_, err := page.ExtractPlayerResponse()
+	if err == nil {
+		t.Error("expected error when player response is not found")
+	}
+}
+
+func TestWatchPage_ExtractPlayerResponse_InvalidJSON(t *testing.T) {
+	// HTML with malformed JSON in ytInitialPlayerResponse
+	html := `<!DOCTYPE html>
+<script>var ytInitialPlayerResponse = {invalid json here};</script>`
+
+	page := &WatchPage{
+		VideoID: "dQw4w9WgXcQ",
+		HTML:    html,
+	}
+
+	_, err := page.ExtractPlayerResponse()
+	if err == nil {
+		t.Error("expected error for invalid JSON")
+	}
+}
+
+func TestWatchPage_ExtractPlayerResponse_WithPlayabilityStatus(t *testing.T) {
+	// Test playability status extraction
+	html := `<!DOCTYPE html>
+<script>var ytInitialPlayerResponse = {"videoDetails":{"videoId":"test123"},"playabilityStatus":{"status":"ERROR","reason":"Video unavailable"}};</script>`
+
+	page := &WatchPage{
+		VideoID: "test123",
+		HTML:    html,
+	}
+
+	playerResponse, err := page.ExtractPlayerResponse()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if playerResponse.PlayabilityStatus.Status != "ERROR" {
+		t.Errorf("expected status %q, got %q", "ERROR", playerResponse.PlayabilityStatus.Status)
+	}
+	if playerResponse.PlayabilityStatus.Reason != "Video unavailable" {
+		t.Errorf("expected reason %q, got %q", "Video unavailable", playerResponse.PlayabilityStatus.Reason)
+	}
+}
+
+func TestWatchPage_ExtractPlayerResponse_NestedJSON(t *testing.T) {
+	// More complex JSON structure with nested objects
+	html := `<!DOCTYPE html>
+<script>var ytInitialPlayerResponse = {"videoDetails":{"videoId":"nested123","title":"Nested Test","lengthSeconds":"120","viewCount":"1000","shortDescription":"A test video"},"playabilityStatus":{"status":"OK"},"streamingData":{"formats":[{"itag":18,"url":"https://example.com/stream"}]}};</script>`
+
+	page := &WatchPage{
+		VideoID: "nested123",
+		HTML:    html,
+	}
+
+	playerResponse, err := page.ExtractPlayerResponse()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if playerResponse.VideoDetails.VideoID != "nested123" {
+		t.Errorf("expected videoId %q, got %q", "nested123", playerResponse.VideoDetails.VideoID)
+	}
+	if playerResponse.VideoDetails.LengthSeconds != "120" {
+		t.Errorf("expected lengthSeconds %q, got %q", "120", playerResponse.VideoDetails.LengthSeconds)
+	}
+	if playerResponse.VideoDetails.ViewCount != "1000" {
+		t.Errorf("expected viewCount %q, got %q", "1000", playerResponse.VideoDetails.ViewCount)
+	}
+	if playerResponse.StreamingData == nil {
+		t.Error("expected streaming data to be non-nil")
+	}
+}

@@ -2,9 +2,12 @@ package youtube
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 )
 
 const (
@@ -98,4 +101,153 @@ type VideoUnavailableError struct {
 
 func (e *VideoUnavailableError) Error() string {
 	return fmt.Sprintf("video '%s' is unavailable: %s", e.VideoID, e.Reason)
+}
+
+// PlayerResponse represents the ytInitialPlayerResponse JSON structure
+// embedded in YouTube watch pages.
+type PlayerResponse struct {
+	VideoDetails      VideoDetailsResponse      `json:"videoDetails"`
+	PlayabilityStatus PlayabilityStatusResponse `json:"playabilityStatus"`
+	StreamingData     *StreamingDataResponse    `json:"streamingData,omitempty"`
+}
+
+// VideoDetailsResponse contains basic video metadata from the player response.
+type VideoDetailsResponse struct {
+	VideoID          string   `json:"videoId"`
+	Title            string   `json:"title"`
+	LengthSeconds    string   `json:"lengthSeconds"`
+	Keywords         []string `json:"keywords"`
+	ChannelID        string   `json:"channelId"`
+	ShortDescription string   `json:"shortDescription"`
+	Thumbnail        struct {
+		Thumbnails []ThumbnailResponse `json:"thumbnails"`
+	} `json:"thumbnail"`
+	ViewCount         string `json:"viewCount"`
+	Author            string `json:"author"`
+	IsLiveContent     bool   `json:"isLiveContent"`
+	IsPrivate         bool   `json:"isPrivate"`
+	IsUnpluggedCorpus bool   `json:"isUnpluggedCorpus"`
+}
+
+// ThumbnailResponse represents a thumbnail image from the player response.
+type ThumbnailResponse struct {
+	URL    string `json:"url"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+}
+
+// PlayabilityStatusResponse contains information about video availability.
+type PlayabilityStatusResponse struct {
+	Status          string `json:"status"`
+	Reason          string `json:"reason,omitempty"`
+	PlayableInEmbed bool   `json:"playableInEmbed"`
+}
+
+// StreamingDataResponse contains the streaming formats and manifest URLs.
+type StreamingDataResponse struct {
+	ExpiresInSeconds string           `json:"expiresInSeconds"`
+	Formats          []FormatResponse `json:"formats"`
+	AdaptiveFormats  []FormatResponse `json:"adaptiveFormats"`
+	DashManifestURL  string           `json:"dashManifestUrl,omitempty"`
+	HlsManifestURL   string           `json:"hlsManifestUrl,omitempty"`
+}
+
+// FormatResponse represents a single stream format.
+type FormatResponse struct {
+	Itag             int    `json:"itag"`
+	URL              string `json:"url,omitempty"`
+	MimeType         string `json:"mimeType"`
+	Bitrate          int64  `json:"bitrate"`
+	Width            int    `json:"width,omitempty"`
+	Height           int    `json:"height,omitempty"`
+	ContentLength    string `json:"contentLength,omitempty"`
+	Quality          string `json:"quality"`
+	QualityLabel     string `json:"qualityLabel,omitempty"`
+	Fps              int    `json:"fps,omitempty"`
+	AudioQuality     string `json:"audioQuality,omitempty"`
+	AudioSampleRate  string `json:"audioSampleRate,omitempty"`
+	AudioChannels    int    `json:"audioChannels,omitempty"`
+	SignatureCipher  string `json:"signatureCipher,omitempty"`
+	AverageBitrate   int64  `json:"averageBitrate,omitempty"`
+	ApproxDurationMs string `json:"approxDurationMs,omitempty"`
+}
+
+// ErrPlayerResponseNotFound is returned when ytInitialPlayerResponse is not found in the page.
+var ErrPlayerResponseNotFound = errors.New("ytInitialPlayerResponse not found in page")
+
+// ExtractPlayerResponse extracts and parses the ytInitialPlayerResponse JSON
+// from the watch page HTML.
+func (p *WatchPage) ExtractPlayerResponse() (*PlayerResponse, error) {
+	// Use a more robust regex that handles nested JSON properly
+	// We need to find the JSON object that starts after "var ytInitialPlayerResponse = "
+	// and ends before the next script boundary
+
+	// First, try to find the start of the player response
+	startPattern := regexp.MustCompile(`var\s+ytInitialPlayerResponse\s*=\s*`)
+	startLoc := startPattern.FindStringIndex(p.HTML)
+	if startLoc == nil {
+		return nil, ErrPlayerResponseNotFound
+	}
+
+	// Find where the JSON object starts (after the "=")
+	jsonStart := startLoc[1]
+
+	// Now we need to find the matching closing brace
+	// We'll use a bracket counting approach for proper JSON extraction
+	jsonStr, err := extractJSONObject(p.HTML[jsonStart:])
+	if err != nil {
+		return nil, fmt.Errorf("extracting JSON: %w", err)
+	}
+
+	var response PlayerResponse
+	if err := json.Unmarshal([]byte(jsonStr), &response); err != nil {
+		return nil, fmt.Errorf("parsing player response JSON: %w", err)
+	}
+
+	return &response, nil
+}
+
+// extractJSONObject extracts a complete JSON object from the start of a string.
+// It handles nested objects and arrays by counting braces.
+func extractJSONObject(s string) (string, error) {
+	if s == "" || s[0] != '{' {
+		return "", errors.New("string does not start with '{'")
+	}
+
+	depth := 0
+	inString := false
+	escaped := false
+
+	for i, c := range s {
+		if escaped {
+			escaped = false
+			continue
+		}
+
+		if c == '\\' && inString {
+			escaped = true
+			continue
+		}
+
+		if c == '"' {
+			inString = !inString
+			continue
+		}
+
+		if inString {
+			continue
+		}
+
+		switch c {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return s[:i+1], nil
+			}
+		}
+	}
+
+	return "", errors.New("unbalanced braces in JSON")
 }
