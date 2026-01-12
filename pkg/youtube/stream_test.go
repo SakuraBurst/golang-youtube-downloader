@@ -411,3 +411,63 @@ func TestStreamingDataResponse_GetStreamManifest_MultipleStreams(t *testing.T) {
 		t.Errorf("expected 2 audio streams, got %d", len(manifest.AudioStreams))
 	}
 }
+
+func TestStreamingDataResponse_GetStreamManifest_VideoOnlyNoAudio(t *testing.T) {
+	sd := &StreamingDataResponse{
+		AdaptiveFormats: []FormatResponse{
+			{Itag: 137, MimeType: "video/mp4; codecs=\"avc1.640028\"", Width: 1920, Height: 1080, Bitrate: 5000000},
+			{Itag: 248, MimeType: "video/webm; codecs=\"vp9\"", Width: 1920, Height: 1080, Bitrate: 4000000},
+		},
+	}
+
+	manifest := sd.GetStreamManifest()
+	if len(manifest.VideoStreams) != 2 {
+		t.Errorf("expected 2 video streams, got %d", len(manifest.VideoStreams))
+	}
+	if len(manifest.AudioStreams) != 0 {
+		t.Errorf("expected 0 audio streams, got %d", len(manifest.AudioStreams))
+	}
+}
+
+func TestStreamingDataResponse_GetStreamManifest_AudioOnlyNoVideo(t *testing.T) {
+	sd := &StreamingDataResponse{
+		AdaptiveFormats: []FormatResponse{
+			{Itag: 140, MimeType: "audio/mp4; codecs=\"mp4a.40.2\"", Bitrate: 128000, AudioSampleRate: "44100"},
+			{Itag: 251, MimeType: "audio/webm; codecs=\"opus\"", Bitrate: 160000, AudioSampleRate: "48000"},
+		},
+	}
+
+	manifest := sd.GetStreamManifest()
+	if len(manifest.VideoStreams) != 0 {
+		t.Errorf("expected 0 video streams, got %d", len(manifest.VideoStreams))
+	}
+	if len(manifest.AudioStreams) != 2 {
+		t.Errorf("expected 2 audio streams, got %d", len(manifest.AudioStreams))
+	}
+}
+
+func TestStreamingDataResponse_GetStreamManifest_CorrectSeparation(t *testing.T) {
+	// Verify that video streams have video properties and audio streams have audio properties
+	sd := &StreamingDataResponse{
+		AdaptiveFormats: []FormatResponse{
+			{Itag: 137, MimeType: "video/mp4; codecs=\"avc1.640028\"", Width: 1920, Height: 1080, Bitrate: 5000000, Fps: 30},
+			{Itag: 140, MimeType: "audio/mp4; codecs=\"mp4a.40.2\"", Bitrate: 128000, AudioSampleRate: "44100", AudioChannels: 2},
+		},
+	}
+
+	manifest := sd.GetStreamManifest()
+
+	// Video streams should have width/height/fps
+	for _, vs := range manifest.VideoStreams {
+		if vs.Width == 0 || vs.Height == 0 {
+			t.Error("video stream should have width and height")
+		}
+	}
+
+	// Audio streams should have sample rate
+	for _, as := range manifest.AudioStreams {
+		if as.SampleRate == 0 {
+			t.Error("audio stream should have sample rate")
+		}
+	}
+}
