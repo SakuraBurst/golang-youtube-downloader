@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -152,6 +153,158 @@ type StreamingDataResponse struct {
 	AdaptiveFormats  []FormatResponse `json:"adaptiveFormats"`
 	DashManifestURL  string           `json:"dashManifestUrl,omitempty"`
 	HlsManifestURL   string           `json:"hlsManifestUrl,omitempty"`
+}
+
+// GetStreamManifest parses the streaming data and returns a StreamManifest
+// containing all available video and audio streams.
+func (sd *StreamingDataResponse) GetStreamManifest() *StreamManifest {
+	manifest := &StreamManifest{
+		VideoStreams: []VideoStreamInfo{},
+		AudioStreams: []AudioStreamInfo{},
+		MuxedStreams: []MuxedStreamInfo{},
+	}
+
+	// Process adaptive formats (video-only and audio-only)
+	for i := range sd.AdaptiveFormats {
+		format := &sd.AdaptiveFormats[i]
+		container, codec := parseMimeType(format.MimeType)
+
+		if isVideoFormat(format.MimeType) {
+			vs := VideoStreamInfo{
+				StreamInfo: StreamInfo{
+					URL:           format.URL,
+					Quality:       format.QualityLabel,
+					Bitrate:       format.Bitrate,
+					Codec:         codec,
+					Container:     container,
+					MimeType:      format.MimeType,
+					ContentLength: parseContentLength(format.ContentLength),
+				},
+				Width:      format.Width,
+				Height:     format.Height,
+				Framerate:  format.Fps,
+				VideoCodec: codec,
+			}
+			// Use calculated quality if none provided
+			if vs.Quality == "" && format.Height > 0 {
+				vs.Quality = QualityLabel(format.Height)
+			}
+			manifest.VideoStreams = append(manifest.VideoStreams, vs)
+		} else if isAudioFormat(format.MimeType) {
+			as := AudioStreamInfo{
+				StreamInfo: StreamInfo{
+					URL:           format.URL,
+					Quality:       format.AudioQuality,
+					Bitrate:       format.Bitrate,
+					Codec:         codec,
+					Container:     container,
+					MimeType:      format.MimeType,
+					ContentLength: parseContentLength(format.ContentLength),
+				},
+				AudioCodec:   codec,
+				SampleRate:   parseSampleRate(format.AudioSampleRate),
+				ChannelCount: format.AudioChannels,
+			}
+			manifest.AudioStreams = append(manifest.AudioStreams, as)
+		}
+	}
+
+	// Process muxed formats (video+audio combined)
+	for i := range sd.Formats {
+		format := &sd.Formats[i]
+		container, codec := parseMimeType(format.MimeType)
+		videoCodec, audioCodec := parseCodecs(codec)
+
+		ms := MuxedStreamInfo{
+			VideoStreamInfo: VideoStreamInfo{
+				StreamInfo: StreamInfo{
+					URL:           format.URL,
+					Quality:       format.QualityLabel,
+					Bitrate:       format.Bitrate,
+					Codec:         codec,
+					Container:     container,
+					MimeType:      format.MimeType,
+					ContentLength: parseContentLength(format.ContentLength),
+				},
+				Width:      format.Width,
+				Height:     format.Height,
+				Framerate:  format.Fps,
+				VideoCodec: videoCodec,
+			},
+			AudioStreamInfo: AudioStreamInfo{
+				AudioCodec: audioCodec,
+			},
+		}
+		manifest.MuxedStreams = append(manifest.MuxedStreams, ms)
+	}
+
+	return manifest
+}
+
+// parseMimeType extracts the container and codec from a MIME type string.
+// Example: "video/mp4; codecs=\"avc1.640028\"" -> "mp4", "avc1.640028"
+func parseMimeType(mimeType string) (container Container, codec string) {
+	// Extract container from the main type
+	switch {
+	case strings.HasPrefix(mimeType, "video/mp4"), strings.HasPrefix(mimeType, "audio/mp4"):
+		container = ContainerMP4
+	case strings.HasPrefix(mimeType, "video/webm"), strings.HasPrefix(mimeType, "audio/webm"):
+		container = ContainerWebM
+	case strings.HasPrefix(mimeType, "video/3gpp"):
+		container = Container3GP
+	}
+
+	// Extract codec from the codecs parameter
+	codecStart := strings.Index(mimeType, "codecs=\"")
+	if codecStart == -1 {
+		return container, ""
+	}
+	codecStart += len("codecs=\"")
+	codecEnd := strings.Index(mimeType[codecStart:], "\"")
+	if codecEnd == -1 {
+		return container, ""
+	}
+
+	codec = mimeType[codecStart : codecStart+codecEnd]
+	return container, codec
+}
+
+// parseCodecs splits a combined codec string into video and audio codecs.
+// Example: "avc1.42001E, mp4a.40.2" -> "avc1.42001E", "mp4a.40.2"
+func parseCodecs(codec string) (videoCodec, audioCodec string) {
+	parts := strings.Split(codec, ", ")
+	if len(parts) >= 2 {
+		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+	}
+	return codec, ""
+}
+
+// isVideoFormat checks if the MIME type represents a video format.
+func isVideoFormat(mimeType string) bool {
+	return strings.HasPrefix(mimeType, "video/")
+}
+
+// isAudioFormat checks if the MIME type represents an audio format.
+func isAudioFormat(mimeType string) bool {
+	return strings.HasPrefix(mimeType, "audio/")
+}
+
+// parseContentLength parses a content length string to int64.
+func parseContentLength(s string) int64 {
+	if s == "" {
+		return 0
+	}
+	val, _ := strconv.ParseInt(s, 10, 64)
+	return val
+}
+
+// parseSampleRate parses a sample rate string to int.
+func parseSampleRate(s string) int {
+	if s == "" {
+		return 0
+	}
+	val, _ := strconv.Atoi(s)
+	return val
 }
 
 // FormatResponse represents a single stream format.
