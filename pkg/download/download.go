@@ -235,3 +235,122 @@ func (apt *aggregateProgressTracker) progressCallbackFor(index int) ProgressCall
 		})
 	}
 }
+
+// BatchProgress represents the progress of a batch download operation.
+type BatchProgress struct {
+	// CompletedCount is the number of videos that have finished downloading.
+	CompletedCount int
+
+	// TotalCount is the total number of videos in the batch.
+	TotalCount int
+
+	// CurrentIndex is the index of the video currently being downloaded (0-based).
+	CurrentIndex int
+
+	// CurrentTitle is the title of the video currently being downloaded.
+	CurrentTitle string
+
+	// CurrentProgress is the download progress of the current video.
+	CurrentProgress Progress
+}
+
+// OverallPercentage returns the overall batch completion percentage (0-100).
+func (bp BatchProgress) OverallPercentage() float64 {
+	if bp.TotalCount == 0 {
+		return 0
+	}
+	return float64(bp.CompletedCount) / float64(bp.TotalCount) * 100
+}
+
+// String returns a human-readable string representation of the batch progress.
+func (bp BatchProgress) String() string {
+	return fmt.Sprintf("%d/%d videos complete", bp.CompletedCount, bp.TotalCount)
+}
+
+// BatchProgressCallback is a function called to report batch download progress.
+type BatchProgressCallback func(BatchProgress)
+
+// BatchItem represents a single item in a batch download.
+type BatchItem struct {
+	// URL is the stream URL to download from.
+	URL string
+
+	// FilePath is the destination file path.
+	FilePath string
+
+	// Title is the video title (used for progress reporting).
+	Title string
+}
+
+// BatchDownloader handles downloading multiple videos as a batch.
+type BatchDownloader struct {
+	downloader *Downloader
+}
+
+// NewBatchDownloader creates a new BatchDownloader.
+func NewBatchDownloader(downloader *Downloader) *BatchDownloader {
+	return &BatchDownloader{downloader: downloader}
+}
+
+// DownloadBatch downloads all items sequentially and reports progress.
+// Returns a slice of DownloadResult in the same order as the input items.
+func (bd *BatchDownloader) DownloadBatch(ctx context.Context, items []BatchItem, progress BatchProgressCallback) []DownloadResult {
+	results := make([]DownloadResult, len(items))
+
+	for i, item := range items {
+		// Report starting this video
+		if progress != nil {
+			progress(BatchProgress{
+				CompletedCount: i,
+				TotalCount:     len(items),
+				CurrentIndex:   i,
+				CurrentTitle:   item.Title,
+			})
+		}
+
+		// Create progress callback for current video
+		var videoProgress ProgressCallback
+		if progress != nil {
+			videoProgress = func(p Progress) {
+				progress(BatchProgress{
+					CompletedCount:  i,
+					TotalCount:      len(items),
+					CurrentIndex:    i,
+					CurrentTitle:    item.Title,
+					CurrentProgress: p,
+				})
+			}
+		}
+
+		// Download this video
+		err := bd.downloader.DownloadStream(ctx, item.URL, item.FilePath, videoProgress)
+		results[i] = DownloadResult{
+			FilePath: item.FilePath,
+			Error:    err,
+		}
+
+		// Report completion of this video
+		if progress != nil {
+			progress(BatchProgress{
+				CompletedCount: i + 1,
+				TotalCount:     len(items),
+				CurrentIndex:   i,
+				CurrentTitle:   item.Title,
+			})
+		}
+
+		// Check for context cancellation
+		if ctx.Err() != nil {
+			// Mark remaining items as failed
+			for j := i + 1; j < len(items); j++ {
+				results[j] = DownloadResult{
+					FilePath: items[j].FilePath,
+					Error:    ctx.Err(),
+				}
+			}
+			break
+		}
+	}
+
+	return results
+}

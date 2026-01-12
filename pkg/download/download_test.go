@@ -477,3 +477,238 @@ func TestDownloadStream_WithProgressReporter(t *testing.T) {
 		t.Errorf("Final progress incomplete: %d of %d", lastUpdate.Downloaded, lastUpdate.Total)
 	}
 }
+
+func TestBatchProgress_Fields(t *testing.T) {
+	bp := BatchProgress{
+		CompletedCount: 3,
+		TotalCount:     10,
+		CurrentIndex:   4,
+		CurrentTitle:   "Test Video",
+		CurrentProgress: Progress{
+			Downloaded: 500,
+			Total:      1000,
+		},
+	}
+
+	if bp.CompletedCount != 3 {
+		t.Errorf("CompletedCount = %d, want %d", bp.CompletedCount, 3)
+	}
+	if bp.TotalCount != 10 {
+		t.Errorf("TotalCount = %d, want %d", bp.TotalCount, 10)
+	}
+	if bp.CurrentIndex != 4 {
+		t.Errorf("CurrentIndex = %d, want %d", bp.CurrentIndex, 4)
+	}
+	if bp.CurrentTitle != "Test Video" {
+		t.Errorf("CurrentTitle = %q, want %q", bp.CurrentTitle, "Test Video")
+	}
+}
+
+func TestBatchProgress_OverallPercentage(t *testing.T) {
+	tests := []struct {
+		name    string
+		bp      BatchProgress
+		wantPct float64
+	}{
+		{
+			name:    "no videos",
+			bp:      BatchProgress{CompletedCount: 0, TotalCount: 0},
+			wantPct: 0,
+		},
+		{
+			name:    "all complete",
+			bp:      BatchProgress{CompletedCount: 10, TotalCount: 10},
+			wantPct: 100,
+		},
+		{
+			name:    "half complete",
+			bp:      BatchProgress{CompletedCount: 5, TotalCount: 10},
+			wantPct: 50,
+		},
+		{
+			name:    "two of four",
+			bp:      BatchProgress{CompletedCount: 2, TotalCount: 4},
+			wantPct: 50,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.bp.OverallPercentage()
+			if got != tt.wantPct {
+				t.Errorf("OverallPercentage() = %v, want %v", got, tt.wantPct)
+			}
+		})
+	}
+}
+
+func TestBatchProgress_String(t *testing.T) {
+	bp := BatchProgress{
+		CompletedCount: 3,
+		TotalCount:     10,
+	}
+
+	got := bp.String()
+	want := "3/10 videos complete"
+	if got != want {
+		t.Errorf("String() = %q, want %q", got, want)
+	}
+}
+
+func TestBatchDownloader_DownloadsAllVideos(t *testing.T) {
+	// Setup test servers for multiple videos
+	contents := [][]byte{
+		[]byte("video 1 content"),
+		[]byte("video 2 content"),
+		[]byte("video 3 content"),
+	}
+
+	servers := make([]*httptest.Server, len(contents))
+	for i, content := range contents {
+		c := content // capture for closure
+		servers[i] = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(c)))
+			_, _ = w.Write(c)
+		}))
+	}
+	defer func() {
+		for _, s := range servers {
+			s.Close()
+		}
+	}()
+
+	// Create batch items
+	tmpDir := t.TempDir()
+	items := make([]BatchItem, len(servers))
+	for i, server := range servers {
+		items[i] = BatchItem{
+			URL:      server.URL,
+			FilePath: filepath.Join(tmpDir, fmt.Sprintf("video%d.mp4", i+1)),
+			Title:    fmt.Sprintf("Video %d", i+1),
+		}
+	}
+
+	// Download all videos
+	downloader := NewDownloader(http.DefaultClient)
+	batchDownloader := NewBatchDownloader(downloader)
+	results := batchDownloader.DownloadBatch(context.Background(), items, nil)
+
+	// Verify all downloads succeeded
+	if len(results) != len(items) {
+		t.Fatalf("Expected %d results, got %d", len(items), len(results))
+	}
+
+	for i, result := range results {
+		if result.Error != nil {
+			t.Errorf("Download %d failed: %v", i, result.Error)
+		}
+	}
+
+	// Verify files were written correctly
+	for i, item := range items {
+		data, err := os.ReadFile(item.FilePath)
+		if err != nil {
+			t.Errorf("Failed to read file %d: %v", i, err)
+			continue
+		}
+		if !bytes.Equal(data, contents[i]) {
+			t.Errorf("Content mismatch for file %d", i)
+		}
+	}
+}
+
+func TestBatchDownloader_ReportsBatchProgress(t *testing.T) {
+	// Setup test servers
+	contents := [][]byte{
+		[]byte("video 1"),
+		[]byte("video 2"),
+	}
+
+	servers := make([]*httptest.Server, len(contents))
+	for i, content := range contents {
+		c := content
+		servers[i] = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(c)))
+			_, _ = w.Write(c)
+		}))
+	}
+	defer func() {
+		for _, s := range servers {
+			s.Close()
+		}
+	}()
+
+	// Create batch items
+	tmpDir := t.TempDir()
+	items := []BatchItem{
+		{URL: servers[0].URL, FilePath: filepath.Join(tmpDir, "v1.mp4"), Title: "First Video"},
+		{URL: servers[1].URL, FilePath: filepath.Join(tmpDir, "v2.mp4"), Title: "Second Video"},
+	}
+
+	// Track progress
+	var progressUpdates []BatchProgress
+	progressCallback := func(bp BatchProgress) {
+		progressUpdates = append(progressUpdates, bp)
+	}
+
+	// Download all videos
+	downloader := NewDownloader(http.DefaultClient)
+	batchDownloader := NewBatchDownloader(downloader)
+	batchDownloader.DownloadBatch(context.Background(), items, progressCallback)
+
+	// Verify we got progress updates
+	if len(progressUpdates) == 0 {
+		t.Fatal("Expected progress updates, got none")
+	}
+
+	// Verify final progress shows all complete
+	lastProgress := progressUpdates[len(progressUpdates)-1]
+	if lastProgress.CompletedCount != 2 {
+		t.Errorf("Expected 2 completed, got %d", lastProgress.CompletedCount)
+	}
+	if lastProgress.TotalCount != 2 {
+		t.Errorf("Expected total 2, got %d", lastProgress.TotalCount)
+	}
+}
+
+func TestBatchDownloader_HandlesPartialFailure(t *testing.T) {
+	// Setup one working server and one failing server
+	content := []byte("working content")
+	workingServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(content)))
+		_, _ = w.Write(content)
+	}))
+	defer workingServer.Close()
+
+	failingServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	}))
+	defer failingServer.Close()
+
+	// Create batch items
+	tmpDir := t.TempDir()
+	items := []BatchItem{
+		{URL: workingServer.URL, FilePath: filepath.Join(tmpDir, "working.mp4"), Title: "Working"},
+		{URL: failingServer.URL, FilePath: filepath.Join(tmpDir, "failing.mp4"), Title: "Failing"},
+	}
+
+	// Download all videos
+	downloader := NewDownloader(http.DefaultClient)
+	batchDownloader := NewBatchDownloader(downloader)
+	results := batchDownloader.DownloadBatch(context.Background(), items, nil)
+
+	// Verify we got results for both
+	if len(results) != 2 {
+		t.Fatalf("Expected 2 results, got %d", len(results))
+	}
+
+	// First should succeed
+	if results[0].Error != nil {
+		t.Errorf("Expected first download to succeed, got error: %v", results[0].Error)
+	}
+
+	// Second should fail
+	if results[1].Error == nil {
+		t.Error("Expected second download to fail")
+	}
+}
