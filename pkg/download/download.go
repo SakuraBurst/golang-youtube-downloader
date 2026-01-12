@@ -32,6 +32,28 @@ func (p Progress) Percentage() float64 {
 // ProgressCallback is a function called to report download progress.
 type ProgressCallback func(Progress)
 
+// ProgressReporter is an interface for types that can receive progress updates.
+// This provides an alternative to ProgressCallback for object-oriented use.
+type ProgressReporter interface {
+	// OnProgress is called when download progress changes.
+	OnProgress(downloaded, total int64)
+}
+
+// ReporterToCallback converts a ProgressReporter to a ProgressCallback.
+func ReporterToCallback(reporter ProgressReporter) ProgressCallback {
+	return func(p Progress) {
+		reporter.OnProgress(p.Downloaded, p.Total)
+	}
+}
+
+// ChannelCallback creates a ProgressCallback that sends progress to a channel.
+// The caller is responsible for reading from the channel to avoid blocking.
+func ChannelCallback(ch chan<- Progress) ProgressCallback {
+	return func(p Progress) {
+		ch <- p
+	}
+}
+
 // Downloader handles downloading streams to files.
 type Downloader struct {
 	client *http.Client

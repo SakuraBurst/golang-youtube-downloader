@@ -386,3 +386,94 @@ func TestDownloadStreamsParallel_HandlesContextCancellation(t *testing.T) {
 		}
 	}
 }
+
+// mockProgressReporter is a test implementation of ProgressReporter
+type mockProgressReporter struct {
+	updates []Progress
+}
+
+func (m *mockProgressReporter) OnProgress(downloaded, total int64) {
+	m.updates = append(m.updates, Progress{Downloaded: downloaded, Total: total})
+}
+
+func TestProgressReporter_Interface(t *testing.T) {
+	reporter := &mockProgressReporter{}
+	callback := ReporterToCallback(reporter)
+
+	// Call the callback
+	callback(Progress{Downloaded: 50, Total: 100})
+	callback(Progress{Downloaded: 100, Total: 100})
+
+	// Verify the reporter received the updates
+	if len(reporter.updates) != 2 {
+		t.Fatalf("Expected 2 updates, got %d", len(reporter.updates))
+	}
+
+	if reporter.updates[0].Downloaded != 50 || reporter.updates[0].Total != 100 {
+		t.Errorf("First update incorrect: %+v", reporter.updates[0])
+	}
+
+	if reporter.updates[1].Downloaded != 100 || reporter.updates[1].Total != 100 {
+		t.Errorf("Second update incorrect: %+v", reporter.updates[1])
+	}
+}
+
+func TestProgressChannel_SendsUpdates(t *testing.T) {
+	ch := make(chan Progress, 10)
+	callback := ChannelCallback(ch)
+
+	// Call the callback
+	callback(Progress{Downloaded: 50, Total: 100})
+	callback(Progress{Downloaded: 100, Total: 100})
+	close(ch)
+
+	// Read updates from channel
+	var updates []Progress
+	for p := range ch {
+		updates = append(updates, p)
+	}
+
+	// Verify updates
+	if len(updates) != 2 {
+		t.Fatalf("Expected 2 updates, got %d", len(updates))
+	}
+
+	if updates[0].Downloaded != 50 || updates[0].Total != 100 {
+		t.Errorf("First update incorrect: %+v", updates[0])
+	}
+
+	if updates[1].Downloaded != 100 || updates[1].Total != 100 {
+		t.Errorf("Second update incorrect: %+v", updates[1])
+	}
+}
+
+func TestDownloadStream_WithProgressReporter(t *testing.T) {
+	// Setup test server
+	content := make([]byte, 1000)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "1000")
+		_, _ = w.Write(content)
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	outputPath := filepath.Join(tmpDir, "output.mp4")
+
+	reporter := &mockProgressReporter{}
+	downloader := NewDownloader(http.DefaultClient)
+	err := downloader.DownloadStream(context.Background(), server.URL, outputPath, ReporterToCallback(reporter))
+	if err != nil {
+		t.Fatalf("DownloadStream failed: %v", err)
+	}
+
+	// Verify progress was reported
+	if len(reporter.updates) == 0 {
+		t.Fatal("Expected progress updates, got none")
+	}
+
+	// Verify final progress
+	lastUpdate := reporter.updates[len(reporter.updates)-1]
+	if lastUpdate.Downloaded != lastUpdate.Total {
+		t.Errorf("Final progress incomplete: %d of %d", lastUpdate.Downloaded, lastUpdate.Total)
+	}
+}
