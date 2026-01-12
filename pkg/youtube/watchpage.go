@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -53,9 +54,9 @@ func (f *WatchPageFetcher) Fetch(ctx context.Context, videoID string) (*WatchPag
 		baseURL = youtubeBaseURL
 	}
 
-	url := fmt.Sprintf("%s/watch?v=%s&bpctr=%s", baseURL, videoID, bpctrValue)
+	watchURL := fmt.Sprintf("%s/watch?v=%s&bpctr=%s", baseURL, videoID, bpctrValue)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, watchURL, http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
@@ -325,6 +326,70 @@ type FormatResponse struct {
 	SignatureCipher  string `json:"signatureCipher,omitempty"`
 	AverageBitrate   int64  `json:"averageBitrate,omitempty"`
 	ApproxDurationMs string `json:"approxDurationMs,omitempty"`
+}
+
+// NeedsCipherDecryption returns true if this stream requires signature cipher decryption
+// to obtain a playable URL.
+func (f *FormatResponse) NeedsCipherDecryption() bool {
+	return f.URL == "" && f.SignatureCipher != ""
+}
+
+// SignatureCipher represents the parsed components of a YouTube signature cipher.
+type SignatureCipher struct {
+	// URL is the base URL for the stream (without the signature).
+	URL string
+
+	// SignatureParam is the query parameter name for the signature (usually "sig" or "signature").
+	SignatureParam string
+
+	// Signature is the encrypted signature that needs to be decrypted.
+	Signature string
+}
+
+// BuildURL constructs the full playable URL by appending the decrypted signature.
+func (sc *SignatureCipher) BuildURL() string {
+	return sc.URL + "&" + sc.SignatureParam + "=" + sc.Signature
+}
+
+// ErrInvalidSignatureCipher is returned when the signature cipher string is malformed.
+var ErrInvalidSignatureCipher = errors.New("invalid signature cipher format")
+
+// ParseSignatureCipher parses a YouTube signatureCipher string into its components.
+// The format is: s=<encrypted_signature>&sp=<signature_param>&url=<url_encoded_url>
+func ParseSignatureCipher(cipher string) (*SignatureCipher, error) {
+	if cipher == "" {
+		return nil, ErrInvalidSignatureCipher
+	}
+
+	// Parse the query string
+	values, err := url.ParseQuery(cipher)
+	if err != nil {
+		return nil, fmt.Errorf("parsing signature cipher: %w", err)
+	}
+
+	// Extract signature (required)
+	signature := values.Get("s")
+	if signature == "" {
+		return nil, fmt.Errorf("%w: missing signature (s)", ErrInvalidSignatureCipher)
+	}
+
+	// Extract URL (required)
+	streamURL := values.Get("url")
+	if streamURL == "" {
+		return nil, fmt.Errorf("%w: missing URL", ErrInvalidSignatureCipher)
+	}
+
+	// Extract signature parameter name (optional, defaults to "signature")
+	signatureParam := values.Get("sp")
+	if signatureParam == "" {
+		signatureParam = "signature"
+	}
+
+	return &SignatureCipher{
+		URL:            streamURL,
+		SignatureParam: signatureParam,
+		Signature:      signature,
+	}, nil
 }
 
 // ErrPlayerResponseNotFound is returned when ytInitialPlayerResponse is not found in the page.

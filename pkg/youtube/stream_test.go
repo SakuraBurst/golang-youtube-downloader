@@ -471,3 +471,98 @@ func TestStreamingDataResponse_GetStreamManifest_CorrectSeparation(t *testing.T)
 		}
 	}
 }
+
+func TestParseSignatureCipher_ValidCipher(t *testing.T) {
+	// Example signatureCipher format: s=encrypted_sig&sp=sig&url=actual_url
+	cipher := "s=ABC123XYZ&sp=sig&url=https%3A%2F%2Fexample.com%2Fvideo"
+
+	parsed, err := ParseSignatureCipher(cipher)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if parsed.Signature != "ABC123XYZ" {
+		t.Errorf("expected signature %q, got %q", "ABC123XYZ", parsed.Signature)
+	}
+	if parsed.SignatureParam != "sig" {
+		t.Errorf("expected signature param %q, got %q", "sig", parsed.SignatureParam)
+	}
+	if parsed.URL != "https://example.com/video" {
+		t.Errorf("expected URL %q, got %q", "https://example.com/video", parsed.URL)
+	}
+}
+
+func TestParseSignatureCipher_DefaultSignatureParam(t *testing.T) {
+	// Without sp parameter, defaults to "signature"
+	cipher := "s=ABC123XYZ&url=https%3A%2F%2Fexample.com%2Fvideo"
+
+	parsed, err := ParseSignatureCipher(cipher)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if parsed.SignatureParam != "signature" {
+		t.Errorf("expected default signature param %q, got %q", "signature", parsed.SignatureParam)
+	}
+}
+
+func TestParseSignatureCipher_MissingSignature(t *testing.T) {
+	cipher := "url=https%3A%2F%2Fexample.com%2Fvideo"
+
+	_, err := ParseSignatureCipher(cipher)
+	if err == nil {
+		t.Error("expected error for missing signature")
+	}
+}
+
+func TestParseSignatureCipher_MissingURL(t *testing.T) {
+	cipher := "s=ABC123XYZ&sp=sig"
+
+	_, err := ParseSignatureCipher(cipher)
+	if err == nil {
+		t.Error("expected error for missing URL")
+	}
+}
+
+func TestParseSignatureCipher_EmptyString(t *testing.T) {
+	_, err := ParseSignatureCipher("")
+	if err == nil {
+		t.Error("expected error for empty cipher string")
+	}
+}
+
+func TestFormatResponse_NeedsCipherDecryption(t *testing.T) {
+	// Stream with direct URL - no decryption needed
+	directStream := FormatResponse{
+		Itag:     137,
+		URL:      "https://example.com/video",
+		MimeType: "video/mp4; codecs=\"avc1.640028\"",
+	}
+	if directStream.NeedsCipherDecryption() {
+		t.Error("stream with direct URL should not need cipher decryption")
+	}
+
+	// Stream with signatureCipher - needs decryption
+	cipherStream := FormatResponse{
+		Itag:            137,
+		MimeType:        "video/mp4; codecs=\"avc1.640028\"",
+		SignatureCipher: "s=ABC123XYZ&sp=sig&url=https%3A%2F%2Fexample.com%2Fvideo",
+	}
+	if !cipherStream.NeedsCipherDecryption() {
+		t.Error("stream with signatureCipher should need cipher decryption")
+	}
+}
+
+func TestSignatureCipher_BuildURL(t *testing.T) {
+	cipher := &SignatureCipher{
+		URL:            "https://example.com/video",
+		SignatureParam: "sig",
+		Signature:      "decrypted_sig",
+	}
+
+	url := cipher.BuildURL()
+	expected := "https://example.com/video&sig=decrypted_sig"
+	if url != expected {
+		t.Errorf("expected URL %q, got %q", expected, url)
+	}
+}
