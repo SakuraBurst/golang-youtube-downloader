@@ -188,3 +188,201 @@ func TestProgress_Percentage(t *testing.T) {
 		})
 	}
 }
+
+func TestDownloadStreamsParallel_DownloadsBothStreams(t *testing.T) {
+	// Setup test servers for video and audio
+	videoContent := []byte("video stream data - fake video content")
+	audioContent := []byte("audio stream data - fake audio content")
+
+	videoServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(videoContent)))
+		_, _ = w.Write(videoContent)
+	}))
+	defer videoServer.Close()
+
+	audioServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(audioContent)))
+		_, _ = w.Write(audioContent)
+	}))
+	defer audioServer.Close()
+
+	// Create temp files for output
+	tmpDir := t.TempDir()
+	videoPath := filepath.Join(tmpDir, "video.mp4")
+	audioPath := filepath.Join(tmpDir, "audio.m4a")
+
+	// Download both streams in parallel
+	downloader := NewDownloader(http.DefaultClient)
+	results := downloader.DownloadStreamsParallel(context.Background(), []StreamDownload{
+		{URL: videoServer.URL, FilePath: videoPath},
+		{URL: audioServer.URL, FilePath: audioPath},
+	}, nil)
+
+	// Verify both downloads succeeded
+	if len(results) != 2 {
+		t.Fatalf("Expected 2 results, got %d", len(results))
+	}
+
+	for _, result := range results {
+		if result.Error != nil {
+			t.Errorf("Download failed for %s: %v", result.FilePath, result.Error)
+		}
+	}
+
+	// Verify files were written correctly
+	videoData, err := os.ReadFile(videoPath)
+	if err != nil {
+		t.Fatalf("Failed to read video file: %v", err)
+	}
+	if !bytes.Equal(videoData, videoContent) {
+		t.Errorf("Video content mismatch")
+	}
+
+	audioData, err := os.ReadFile(audioPath)
+	if err != nil {
+		t.Fatalf("Failed to read audio file: %v", err)
+	}
+	if !bytes.Equal(audioData, audioContent) {
+		t.Errorf("Audio content mismatch")
+	}
+}
+
+func TestDownloadStreamsParallel_HandlesPartialFailure(t *testing.T) {
+	// Setup one working server and one failing server
+	content := []byte("working stream")
+	workingServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(content)))
+		_, _ = w.Write(content)
+	}))
+	defer workingServer.Close()
+
+	failingServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	}))
+	defer failingServer.Close()
+
+	// Create temp files for output
+	tmpDir := t.TempDir()
+	workingPath := filepath.Join(tmpDir, "working.mp4")
+	failingPath := filepath.Join(tmpDir, "failing.mp4")
+
+	// Download both streams in parallel
+	downloader := NewDownloader(http.DefaultClient)
+	results := downloader.DownloadStreamsParallel(context.Background(), []StreamDownload{
+		{URL: workingServer.URL, FilePath: workingPath},
+		{URL: failingServer.URL, FilePath: failingPath},
+	}, nil)
+
+	// Verify we got both results
+	if len(results) != 2 {
+		t.Fatalf("Expected 2 results, got %d", len(results))
+	}
+
+	// Find results by path
+	var workingResult, failingResult *DownloadResult
+	for i := range results {
+		switch results[i].FilePath {
+		case workingPath:
+			workingResult = &results[i]
+		case failingPath:
+			failingResult = &results[i]
+		}
+	}
+
+	// Verify working download succeeded
+	if workingResult == nil || workingResult.Error != nil {
+		t.Errorf("Expected working download to succeed")
+	}
+
+	// Verify failing download failed
+	if failingResult == nil || failingResult.Error == nil {
+		t.Errorf("Expected failing download to fail")
+	}
+}
+
+func TestDownloadStreamsParallel_ReportsAggregateProgress(t *testing.T) {
+	// Setup test servers
+	content1 := make([]byte, 500)
+	content2 := make([]byte, 500)
+
+	server1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "500")
+		_, _ = w.Write(content1)
+	}))
+	defer server1.Close()
+
+	server2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "500")
+		_, _ = w.Write(content2)
+	}))
+	defer server2.Close()
+
+	// Create temp files for output
+	tmpDir := t.TempDir()
+	path1 := filepath.Join(tmpDir, "file1.mp4")
+	path2 := filepath.Join(tmpDir, "file2.mp4")
+
+	// Track aggregate progress
+	var progressUpdates []Progress
+	progressCallback := func(p Progress) {
+		progressUpdates = append(progressUpdates, p)
+	}
+
+	// Download both streams in parallel
+	downloader := NewDownloader(http.DefaultClient)
+	results := downloader.DownloadStreamsParallel(context.Background(), []StreamDownload{
+		{URL: server1.URL, FilePath: path1},
+		{URL: server2.URL, FilePath: path2},
+	}, progressCallback)
+
+	// Verify downloads succeeded
+	for _, result := range results {
+		if result.Error != nil {
+			t.Errorf("Download failed: %v", result.Error)
+		}
+	}
+
+	// Verify progress was reported
+	if len(progressUpdates) == 0 {
+		t.Fatal("Expected progress updates, got none")
+	}
+
+	// Verify final progress shows total of both streams (1000 bytes)
+	lastProgress := progressUpdates[len(progressUpdates)-1]
+	if lastProgress.Total != 1000 {
+		t.Errorf("Expected total of 1000 bytes, got %d", lastProgress.Total)
+	}
+}
+
+func TestDownloadStreamsParallel_HandlesContextCancellation(t *testing.T) {
+	// Setup test server that blocks
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "1000000")
+		_, _ = w.Write([]byte("start"))
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	// Create temp files for output
+	tmpDir := t.TempDir()
+	path1 := filepath.Join(tmpDir, "file1.mp4")
+	path2 := filepath.Join(tmpDir, "file2.mp4")
+
+	// Create canceled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	// Download should fail
+	downloader := NewDownloader(http.DefaultClient)
+	results := downloader.DownloadStreamsParallel(ctx, []StreamDownload{
+		{URL: server.URL, FilePath: path1},
+		{URL: server.URL, FilePath: path2},
+	}, nil)
+
+	// Verify all downloads failed
+	for _, result := range results {
+		if result.Error == nil {
+			t.Errorf("Expected download to fail for %s", result.FilePath)
+		}
+	}
+}

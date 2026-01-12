@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 // Progress represents the current download progress.
@@ -120,4 +121,95 @@ func (pr *progressReader) Read(p []byte) (int, error) {
 		})
 	}
 	return n, err
+}
+
+// StreamDownload represents a single stream to download.
+type StreamDownload struct {
+	// URL is the stream URL to download from.
+	URL string
+
+	// FilePath is the destination file path.
+	FilePath string
+}
+
+// DownloadResult represents the result of a download operation.
+type DownloadResult struct {
+	// FilePath is the destination file path.
+	FilePath string
+
+	// Error is any error that occurred during download (nil if successful).
+	Error error
+}
+
+// DownloadStreamsParallel downloads multiple streams in parallel using goroutines.
+// Progress is reported as an aggregate of all downloads via the optional callback.
+// Returns a slice of DownloadResult in the same order as the input streams.
+func (d *Downloader) DownloadStreamsParallel(ctx context.Context, streams []StreamDownload, progress ProgressCallback) []DownloadResult {
+	if len(streams) == 0 {
+		return nil
+	}
+
+	results := make([]DownloadResult, len(streams))
+	var wg sync.WaitGroup
+
+	// Create aggregate progress tracker
+	var tracker *aggregateProgressTracker
+	if progress != nil {
+		tracker = newAggregateProgressTracker(len(streams), progress)
+	}
+
+	for i, stream := range streams {
+		wg.Add(1)
+		go func(idx int, s StreamDownload) {
+			defer wg.Done()
+
+			var streamProgress ProgressCallback
+			if tracker != nil {
+				streamProgress = tracker.progressCallbackFor(idx)
+			}
+
+			err := d.DownloadStream(ctx, s.URL, s.FilePath, streamProgress)
+			results[idx] = DownloadResult{
+				FilePath: s.FilePath,
+				Error:    err,
+			}
+		}(i, stream)
+	}
+
+	wg.Wait()
+	return results
+}
+
+// aggregateProgressTracker tracks progress across multiple parallel downloads.
+type aggregateProgressTracker struct {
+	mu         sync.Mutex
+	progresses []Progress // Per-stream progress
+	callback   ProgressCallback
+}
+
+func newAggregateProgressTracker(count int, callback ProgressCallback) *aggregateProgressTracker {
+	return &aggregateProgressTracker{
+		progresses: make([]Progress, count),
+		callback:   callback,
+	}
+}
+
+func (apt *aggregateProgressTracker) progressCallbackFor(index int) ProgressCallback {
+	return func(p Progress) {
+		apt.mu.Lock()
+		apt.progresses[index] = p
+
+		// Calculate aggregate progress
+		var totalDownloaded, totalSize int64
+		for _, sp := range apt.progresses {
+			totalDownloaded += sp.Downloaded
+			totalSize += sp.Total
+		}
+		apt.mu.Unlock()
+
+		apt.callback(Progress{
+			Downloaded: totalDownloaded,
+			Total:      totalSize,
+		})
+	}
 }
