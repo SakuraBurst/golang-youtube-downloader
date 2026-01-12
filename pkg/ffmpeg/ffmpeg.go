@@ -2,8 +2,12 @@
 package ffmpeg
 
 import (
+	"bytes"
+	"context"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -97,4 +101,60 @@ func IsBundled() bool {
 	bundledPath := filepath.Join(filepath.Dir(exe), cliFileName())
 	_, err = os.Stat(bundledPath)
 	return err == nil
+}
+
+// buildMuxArgs builds the FFmpeg command arguments for muxing video and audio streams.
+func buildMuxArgs(videoPath, audioPath, outputPath string) []string {
+	return []string{
+		"-i", videoPath,
+		"-i", audioPath,
+		"-c", "copy",
+		"-y", // Overwrite output file without asking
+		outputPath,
+	}
+}
+
+// MuxStreams combines a video stream and an audio stream into a single output file.
+// Uses FFmpeg's copy codec to avoid re-encoding.
+func MuxStreams(videoPath, audioPath, outputPath string) error {
+	ffmpegPath, err := GetCliFilePath()
+	if err != nil {
+		return err
+	}
+
+	args := buildMuxArgs(videoPath, audioPath, outputPath)
+	cmd := exec.Command(ffmpegPath, args...)
+
+	// Capture stderr for error messages
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("ffmpeg mux failed: %w: %s", err, stderr.String())
+	}
+
+	return nil
+}
+
+// MuxStreamsWithContext combines a video stream and an audio stream into a single output file.
+// Uses FFmpeg's copy codec to avoid re-encoding.
+// The context can be used to cancel the operation.
+func MuxStreamsWithContext(ctx context.Context, videoPath, audioPath, outputPath string) error {
+	ffmpegPath, err := GetCliFilePath()
+	if err != nil {
+		return err
+	}
+
+	args := buildMuxArgs(videoPath, audioPath, outputPath)
+	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
+
+	// Capture stderr for error messages
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("ffmpeg mux failed: %w: %s", err, stderr.String())
+	}
+
+	return nil
 }

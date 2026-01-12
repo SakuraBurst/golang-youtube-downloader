@@ -216,3 +216,88 @@ func TestGetCliFilePath_ReturnsPathWhenFound(t *testing.T) {
 		t.Errorf("Expected %s, got %s", ffmpegPath, path)
 	}
 }
+
+func TestBuildMuxArgs(t *testing.T) {
+	tests := []struct {
+		name       string
+		videoPath  string
+		audioPath  string
+		outputPath string
+		wantArgs   []string
+	}{
+		{
+			name:       "basic mux",
+			videoPath:  "video.mp4",
+			audioPath:  "audio.m4a",
+			outputPath: "output.mp4",
+			wantArgs:   []string{"-i", "video.mp4", "-i", "audio.m4a", "-c", "copy", "-y", "output.mp4"},
+		},
+		{
+			name:       "paths with spaces",
+			videoPath:  "my video.mp4",
+			audioPath:  "my audio.m4a",
+			outputPath: "my output.mp4",
+			wantArgs:   []string{"-i", "my video.mp4", "-i", "my audio.m4a", "-c", "copy", "-y", "my output.mp4"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := buildMuxArgs(tt.videoPath, tt.audioPath, tt.outputPath)
+			if len(args) != len(tt.wantArgs) {
+				t.Errorf("buildMuxArgs() = %v, want %v", args, tt.wantArgs)
+				return
+			}
+			for i, arg := range args {
+				if arg != tt.wantArgs[i] {
+					t.Errorf("buildMuxArgs()[%d] = %v, want %v", i, arg, tt.wantArgs[i])
+				}
+			}
+		})
+	}
+}
+
+func TestMuxStreams_ReturnsErrorWhenFFmpegNotFound(t *testing.T) {
+	// Save current PATH and restore after test
+	oldPath := os.Getenv("PATH")
+	defer func() { _ = os.Setenv("PATH", oldPath) }()
+
+	// Set PATH to an empty directory
+	tmpDir := t.TempDir()
+	_ = os.Setenv("PATH", tmpDir)
+
+	// Save current directory and change to temp dir
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get current directory: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldWd) }()
+
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("Failed to change to temp directory: %v", err)
+	}
+
+	// Should return ErrNotFound
+	err = MuxStreams("video.mp4", "audio.m4a", "output.mp4")
+	if err != ErrNotFound {
+		t.Errorf("Expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestMuxStreams_ReturnsErrorForMissingInputFiles(t *testing.T) {
+	// Skip if ffmpeg not available
+	if !IsAvailable() {
+		t.Skip("FFmpeg not available")
+	}
+
+	tmpDir := t.TempDir()
+	videoPath := filepath.Join(tmpDir, "nonexistent_video.mp4")
+	audioPath := filepath.Join(tmpDir, "nonexistent_audio.m4a")
+	outputPath := filepath.Join(tmpDir, "output.mp4")
+
+	// Should return error for missing input files
+	err := MuxStreams(videoPath, audioPath, outputPath)
+	if err == nil {
+		t.Error("Expected error for missing input files")
+	}
+}
