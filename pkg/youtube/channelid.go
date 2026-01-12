@@ -120,3 +120,24 @@ func extractFirstPathSegment(path string) string {
 	}
 	return path
 }
+
+// ChannelToUploadsPlaylistID converts a channel ID to its uploads playlist ID.
+// The uploads playlist for a channel is derived by replacing "UC" with "UU".
+// Returns an empty string if the input is not a valid channel ID.
+func ChannelToUploadsPlaylistID(channelID string) string {
+	if !IsValidChannelID(channelID) {
+		return ""
+	}
+	// Replace "UC" prefix with "UU" to get the uploads playlist ID
+	return "UU" + channelID[2:]
+}
+
+// UploadsPlaylistID returns the uploads playlist ID for this channel.
+// Only works for ChannelTypeID identifiers; returns empty string for other types.
+// For handles, custom names, and usernames, you need to resolve the channel ID first.
+func (ci ChannelIdentifier) UploadsPlaylistID() string {
+	if ci.Type != ChannelTypeID {
+		return ""
+	}
+	return ChannelToUploadsPlaylistID(ci.Value)
+}

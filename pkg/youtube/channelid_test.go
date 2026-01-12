@@ -179,3 +179,98 @@ func TestIsValidChannelID(t *testing.T) {
 		})
 	}
 }
+
+func TestChannelToUploadsPlaylistID(t *testing.T) {
+	tests := []struct {
+		name      string
+		channelID string
+		want      string
+	}{
+		{
+			name:      "typical channel ID",
+			channelID: "UCuAXFkgsw1L7xaCfnd5JJOw",
+			want:      "UUuAXFkgsw1L7xaCfnd5JJOw",
+		},
+		{
+			name:      "channel with dashes",
+			channelID: "UC-lHJZR3Gqxm24_Vd_AJ5Yw",
+			want:      "UU-lHJZR3Gqxm24_Vd_AJ5Yw",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ChannelToUploadsPlaylistID(tt.channelID)
+			if got != tt.want {
+				t.Errorf("ChannelToUploadsPlaylistID(%q) = %q, want %q", tt.channelID, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestChannelToUploadsPlaylistID_InvalidInput(t *testing.T) {
+	tests := []struct {
+		name      string
+		channelID string
+	}{
+		{
+			name:      "empty string",
+			channelID: "",
+		},
+		{
+			name:      "too short",
+			channelID: "UC123",
+		},
+		{
+			name:      "doesn't start with UC",
+			channelID: "ABuAXFkgsw1L7xaCfnd5JJOw",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ChannelToUploadsPlaylistID(tt.channelID)
+			if got != "" {
+				t.Errorf("ChannelToUploadsPlaylistID(%q) = %q, want empty string for invalid input", tt.channelID, got)
+			}
+		})
+	}
+}
+
+func TestChannelIdentifier_UploadsPlaylistID(t *testing.T) {
+	tests := []struct {
+		name       string
+		identifier ChannelIdentifier
+		want       string
+	}{
+		{
+			name:       "channel ID type",
+			identifier: ChannelIdentifier{Type: ChannelTypeID, Value: "UCuAXFkgsw1L7xaCfnd5JJOw"},
+			want:       "UUuAXFkgsw1L7xaCfnd5JJOw",
+		},
+		{
+			name:       "handle type returns empty",
+			identifier: ChannelIdentifier{Type: ChannelTypeHandle, Value: "MrBeast"},
+			want:       "",
+		},
+		{
+			name:       "custom type returns empty",
+			identifier: ChannelIdentifier{Type: ChannelTypeCustom, Value: "pewdiepie"},
+			want:       "",
+		},
+		{
+			name:       "user type returns empty",
+			identifier: ChannelIdentifier{Type: ChannelTypeUser, Value: "Google"},
+			want:       "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.identifier.UploadsPlaylistID()
+			if got != tt.want {
+				t.Errorf("UploadsPlaylistID() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
