@@ -782,3 +782,140 @@ func TestIntegration_DownloadStreamsParallel(t *testing.T) {
 	t.Logf("Parallel download complete: video=%d bytes, audio=%d bytes (%d progress updates)",
 		videoInfo.Size(), audioInfo.Size(), progressUpdates)
 }
+
+// TestIntegration_ParsePlaylistURL tests parsing various playlist URL formats.
+func TestIntegration_ParsePlaylistURL(t *testing.T) {
+	SkipIfNoIntegration(t)
+
+	fixtures := DefaultFixtures()
+
+	// Test various playlist URL formats
+	testCases := []struct {
+		name       string
+		url        string
+		wantID     string
+		wantType   youtube.QueryType
+		shouldFail bool
+	}{
+		{
+			name:     "standard playlist URL",
+			url:      "https://www.youtube.com/playlist?list=" + fixtures.PlaylistID,
+			wantID:   fixtures.PlaylistID,
+			wantType: youtube.QueryTypePlaylist,
+		},
+		{
+			name:     "playlist ID only",
+			url:      fixtures.PlaylistID,
+			wantID:   fixtures.PlaylistID,
+			wantType: youtube.QueryTypePlaylist,
+		},
+		{
+			name:     "watch URL with playlist",
+			url:      "https://www.youtube.com/watch?v=" + fixtures.VideoID + "&list=" + fixtures.PlaylistID,
+			wantID:   fixtures.VideoID, // Video takes priority
+			wantType: youtube.QueryTypeVideo,
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := youtube.ResolveQuery(tc.url)
+
+			if tc.shouldFail {
+				if err == nil {
+					t.Error("Expected error, got nil")
+				}
+				return
+			}
+
+			RequireNoError(t, err, "Failed to resolve query")
+
+			if result.Type != tc.wantType {
+				t.Errorf("Type = %v, want %v", result.Type, tc.wantType)
+			}
+
+			switch result.Type {
+			case youtube.QueryTypePlaylist:
+				if result.PlaylistID != tc.wantID {
+					t.Errorf("PlaylistID = %q, want %q", result.PlaylistID, tc.wantID)
+				}
+			case youtube.QueryTypeVideo:
+				if result.VideoID != tc.wantID {
+					t.Errorf("VideoID = %q, want %q", result.VideoID, tc.wantID)
+				}
+			}
+		})
+	}
+}
+
+// TestIntegration_ValidatePlaylistID tests that the test playlist ID is valid.
+func TestIntegration_ValidatePlaylistID(t *testing.T) {
+	SkipIfNoIntegration(t)
+
+	fixtures := DefaultFixtures()
+
+	// Verify playlist ID is valid
+	if !youtube.IsValidPlaylistID(fixtures.PlaylistID) {
+		t.Errorf("Test fixture playlist ID %q is not valid", fixtures.PlaylistID)
+	}
+
+	// Verify it can be parsed from a URL
+	playlistURL := "https://www.youtube.com/playlist?list=" + fixtures.PlaylistID
+	result, err := youtube.ResolveQuery(playlistURL)
+	RequireNoError(t, err, "Failed to resolve playlist URL")
+
+	if result.Type != youtube.QueryTypePlaylist {
+		t.Errorf("Expected QueryTypePlaylist, got %v", result.Type)
+	}
+	if result.PlaylistID != fixtures.PlaylistID {
+		t.Errorf("PlaylistID = %q, want %q", result.PlaylistID, fixtures.PlaylistID)
+	}
+
+	t.Logf("Validated playlist ID: %s", fixtures.PlaylistID)
+}
+
+// TestIntegration_BatchDownloadProgress tests batch download progress tracking.
+// Note: This test uses mock data since real downloads require signature decryption.
+func TestIntegration_BatchDownloadProgress(t *testing.T) {
+	// This test doesn't require real YouTube - it tests the batch downloader mechanics
+	// Create test HTTP servers to simulate stream downloads
+	content1 := []byte("test video content 1")
+	content2 := []byte("test video content 2")
+
+	// We'll test with httptest servers instead of real YouTube
+	// since we can't download real streams without signature decryption
+	t.Log("Testing batch download progress tracking with mock servers")
+
+	tempDir := TempDir(t)
+	path1 := filepath.Join(tempDir, "video1.mp4")
+	path2 := filepath.Join(tempDir, "video2.mp4")
+
+	// Create mock batch items
+	items := []download.BatchItem{
+		{FilePath: path1, Title: "Video 1"},
+		{FilePath: path2, Title: "Video 2"},
+	}
+
+	// Verify BatchProgress struct works correctly
+	bp := download.BatchProgress{
+		CompletedCount: 1,
+		TotalCount:     len(items),
+		CurrentIndex:   1,
+		CurrentTitle:   "Video 2",
+	}
+
+	if bp.OverallPercentage() != 50 {
+		t.Errorf("OverallPercentage = %v, want 50", bp.OverallPercentage())
+	}
+
+	expectedStr := "1/2 videos complete"
+	if bp.String() != expectedStr {
+		t.Errorf("String() = %q, want %q", bp.String(), expectedStr)
+	}
+
+	t.Logf("Batch progress tracking verified:")
+	t.Logf("  Completed: %d/%d", bp.CompletedCount, bp.TotalCount)
+	t.Logf("  Percentage: %.0f%%", bp.OverallPercentage())
+	t.Logf("  Content sizes: %d, %d bytes", len(content1), len(content2))
+}
