@@ -1,10 +1,21 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/SakuraBurst/golang-youtube-downloader/pkg/download"
+	"github.com/SakuraBurst/golang-youtube-downloader/pkg/ffmpeg"
+	"github.com/SakuraBurst/golang-youtube-downloader/pkg/filename"
+	"github.com/SakuraBurst/golang-youtube-downloader/pkg/youtube"
 )
 
 type downloadOptions struct {
@@ -44,11 +55,246 @@ func runDownload(cmd *cobra.Command, url string, opts *downloadOptions) error {
 		return errors.New("URL is required")
 	}
 
-	// TODO: Implement actual download logic
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Downloading: %s\n", url)
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Output: %s\n", opts.output)
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Quality: %s\n", opts.quality)
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Format: %s\n", opts.format)
+	// Create default dependencies
+	fetcher := &youtube.WatchPageFetcher{
+		Client: http.DefaultClient,
+	}
+	downloader := download.NewDownloader(http.DefaultClient)
 
+	return runDownloadWithDeps(cmd.Context(), cmd.OutOrStdout(), url, opts, fetcher, downloader, ffmpeg.MuxStreamsWithContext)
+}
+
+// MuxerFunc is a function type for muxing video and audio streams.
+type MuxerFunc func(ctx context.Context, videoPath, audioPath, outputPath string) error
+
+// runDownloadWithDeps implements the download command logic with injectable dependencies.
+func runDownloadWithDeps(
+	ctx context.Context,
+	w io.Writer,
+	urlStr string,
+	opts *downloadOptions,
+	fetcher *youtube.WatchPageFetcher,
+	downloader *download.Downloader,
+	muxer MuxerFunc,
+) error {
+	// Parse the video ID from the URL
+	videoID, err := youtube.ParseVideoID(urlStr)
+	if err != nil {
+		return fmt.Errorf("invalid video URL or ID: %w", err)
+	}
+
+	_, _ = fmt.Fprintf(w, "Fetching video info: %s\n", videoID)
+
+	// Fetch the watch page
+	watchPage, err := fetcher.Fetch(ctx, videoID)
+	if err != nil {
+		return fmt.Errorf("failed to fetch video page: %w", err)
+	}
+
+	// Extract player response
+	playerResponse, err := watchPage.ExtractPlayerResponse()
+	if err != nil {
+		return fmt.Errorf("failed to extract video data: %w", err)
+	}
+
+	// Check playability status
+	if playerResponse.PlayabilityStatus.Status != "OK" {
+		reason := playerResponse.PlayabilityStatus.Reason
+		if reason == "" {
+			reason = "unknown reason"
+		}
+		return fmt.Errorf("video unavailable: %s", reason)
+	}
+
+	// Convert to Video struct
+	video, err := playerResponse.ToVideo()
+	if err != nil {
+		return fmt.Errorf("failed to parse video metadata: %w", err)
+	}
+
+	_, _ = fmt.Fprintf(w, "Title: %s\n", video.Title)
+	_, _ = fmt.Fprintf(w, "Author: %s\n", video.Author.Name)
+	_, _ = fmt.Fprintf(w, "Duration: %s\n", video.DurationString())
+
+	// Check if we have streaming data
+	if playerResponse.StreamingData == nil {
+		return errors.New("no streaming data available")
+	}
+
+	// Get stream manifest
+	manifest := playerResponse.StreamingData.GetStreamManifest()
+
+	// Determine if audio-only mode
+	audioOnly := strings.EqualFold(opts.format, "mp3") || strings.EqualFold(opts.quality, "audio")
+
+	// Get preferred container
+	container := parseContainer(opts.format)
+
+	// Determine output path
+	containerStr := string(container)
+	if audioOnly {
+		containerStr = "mp3"
+	}
+	outputFilename := filename.ApplyTemplate(filename.DefaultTemplate, video, containerStr, "")
+	outputPath := filepath.Join(opts.output, outputFilename)
+
+	if audioOnly {
+		return downloadAudioOnly(ctx, w, manifest, outputPath, downloader)
+	}
+
+	// Get quality preference and select best option
+	quality := parseQualityPreference(opts.quality)
+	options := manifest.GetDownloadOptions()
+	selectedOption := youtube.SelectBestOption(options, quality, container)
+
+	if selectedOption == nil {
+		// Try to use muxed stream if no adaptive option is available
+		if len(manifest.MuxedStreams) > 0 {
+			return downloadMuxedStream(ctx, w, &manifest.MuxedStreams[0], outputPath, downloader)
+		}
+		return errors.New("no suitable stream found for the requested quality")
+	}
+
+	_, _ = fmt.Fprintf(w, "Selected quality: %s\n", selectedOption.QualityLabel())
+
+	// Check if we need to mux separate streams
+	if selectedOption.VideoStream != nil && selectedOption.AudioStream != nil && selectedOption.VideoStream.URL != "" {
+		// Check if streams have separate URLs (need muxing)
+		if selectedOption.AudioStream.URL != "" && selectedOption.VideoStream.URL != selectedOption.AudioStream.URL {
+			return downloadAndMux(ctx, w, video, selectedOption, outputPath, downloader, muxer)
+		}
+	}
+
+	// Download single stream (muxed or video-only)
+	if selectedOption.VideoStream != nil && selectedOption.VideoStream.URL != "" {
+		return downloadSingleStream(ctx, w, selectedOption.VideoStream.URL, outputPath, downloader)
+	}
+
+	// Fallback to first muxed stream
+	if len(manifest.MuxedStreams) > 0 && manifest.MuxedStreams[0].VideoStreamInfo.URL != "" {
+		return downloadMuxedStream(ctx, w, &manifest.MuxedStreams[0], outputPath, downloader)
+	}
+
+	return errors.New("no downloadable stream found")
+}
+
+// downloadSingleStream downloads a single stream to the output path.
+func downloadSingleStream(ctx context.Context, w io.Writer, url, outputPath string, downloader *download.Downloader) error {
+	_, _ = fmt.Fprintf(w, "Downloading to: %s\n", outputPath)
+
+	progressCallback := func(p download.Progress) {
+		if p.Total > 0 {
+			_, _ = fmt.Fprintf(w, "\rProgress: %.1f%%", p.Percentage())
+		}
+	}
+
+	err := downloader.DownloadStream(ctx, url, outputPath, progressCallback)
+	if err != nil {
+		return fmt.Errorf("download failed: %w", err)
+	}
+
+	_, _ = fmt.Fprintf(w, "\nDownload complete: %s\n", outputPath)
 	return nil
+}
+
+// downloadMuxedStream downloads a muxed stream.
+func downloadMuxedStream(ctx context.Context, w io.Writer, stream *youtube.MuxedStreamInfo, outputPath string, downloader *download.Downloader) error {
+	if stream.VideoStreamInfo.URL == "" {
+		return errors.New("muxed stream has no URL")
+	}
+	return downloadSingleStream(ctx, w, stream.VideoStreamInfo.URL, outputPath, downloader)
+}
+
+// downloadAudioOnly downloads audio-only stream.
+func downloadAudioOnly(ctx context.Context, w io.Writer, manifest *youtube.StreamManifest, outputPath string, downloader *download.Downloader) error {
+	bestAudio := manifest.GetBestAudioStream()
+	if bestAudio == nil {
+		return errors.New("no audio stream available")
+	}
+
+	if bestAudio.URL == "" {
+		return errors.New("audio stream has no URL")
+	}
+
+	_, _ = fmt.Fprintf(w, "Downloading audio: %s\n", bestAudio.AudioCodec)
+	return downloadSingleStream(ctx, w, bestAudio.URL, outputPath, downloader)
+}
+
+// downloadAndMux downloads video and audio streams separately and muxes them.
+func downloadAndMux(
+	ctx context.Context,
+	w io.Writer,
+	video *youtube.Video,
+	option *youtube.DownloadOption,
+	outputPath string,
+	downloader *download.Downloader,
+	muxer MuxerFunc,
+) error {
+	// Create temp directory for intermediate files
+	tempDir, err := os.MkdirTemp("", "ytdl-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(tempDir) }()
+
+	// Download video stream
+	videoPath := filepath.Join(tempDir, "video."+string(option.VideoStream.Container))
+	_, _ = fmt.Fprintf(w, "Downloading video stream...\n")
+	if err := downloader.DownloadStream(ctx, option.VideoStream.URL, videoPath, nil); err != nil {
+		return fmt.Errorf("failed to download video: %w", err)
+	}
+
+	// Download audio stream
+	audioPath := filepath.Join(tempDir, "audio."+string(option.AudioStream.Container))
+	_, _ = fmt.Fprintf(w, "Downloading audio stream...\n")
+	if err := downloader.DownloadStream(ctx, option.AudioStream.URL, audioPath, nil); err != nil {
+		return fmt.Errorf("failed to download audio: %w", err)
+	}
+
+	// Mux streams together
+	if muxer == nil {
+		return errors.New("muxer not available (FFmpeg required)")
+	}
+
+	_, _ = fmt.Fprintf(w, "Muxing streams...\n")
+	if err := muxer(ctx, videoPath, audioPath, outputPath); err != nil {
+		return fmt.Errorf("failed to mux streams: %w", err)
+	}
+
+	_, _ = fmt.Fprintf(w, "Download complete: %s\n", outputPath)
+	return nil
+}
+
+// parseQualityPreference converts a quality string to VideoQualityPreference.
+func parseQualityPreference(quality string) youtube.VideoQualityPreference {
+	switch strings.ToLower(quality) {
+	case "best", "highest":
+		return youtube.QualityHighest
+	case "1080p", "1080":
+		return youtube.QualityUpTo1080p
+	case "720p", "720":
+		return youtube.QualityUpTo720p
+	case "480p", "480":
+		return youtube.QualityUpTo480p
+	case "360p", "360":
+		return youtube.QualityUpTo360p
+	case "worst", "lowest", "audio":
+		return youtube.QualityLowest
+	default:
+		return youtube.QualityHighest
+	}
+}
+
+// parseContainer converts a format string to Container.
+func parseContainer(format string) youtube.Container {
+	switch strings.ToLower(format) {
+	case "webm":
+		return youtube.ContainerWebM
+	case "mp3":
+		return youtube.ContainerMP3
+	case "mp4":
+		return youtube.ContainerMP4
+	default:
+		return youtube.ContainerMP4
+	}
 }
