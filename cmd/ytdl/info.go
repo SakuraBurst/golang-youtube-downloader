@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 
 	"github.com/spf13/cobra"
 
@@ -13,6 +14,8 @@ import (
 )
 
 func newInfoCmd() *cobra.Command {
+	var cookieFile string
+
 	cmd := &cobra.Command{
 		Use:   "info <url>",
 		Short: "Show video metadata",
@@ -26,21 +29,45 @@ Shows details including:
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			url := args[0]
-			return runInfo(cmd, url)
+			return runInfo(cmd, url, cookieFile)
 		},
 	}
+
+	cmd.Flags().StringVar(&cookieFile, "cookies", "", "Path to Netscape format cookie file (for age-restricted or private videos)")
 
 	return cmd
 }
 
-func runInfo(cmd *cobra.Command, url string) error {
+func runInfo(cmd *cobra.Command, url, cookieFile string) error {
 	if url == "" {
 		return errors.New("URL is required")
 	}
 
-	// Create a default fetcher with standard HTTP client
+	// Load cookies if provided
+	var cookies []*http.Cookie
+	if cookieFile != "" {
+		var err error
+		cookies, err = youtube.LoadCookiesFromFile(cookieFile)
+		if err != nil {
+			return fmt.Errorf("failed to load cookies: %w", err)
+		}
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Loaded %d cookies from %s\n", len(cookies), cookieFile)
+	}
+
+	// Create HTTP client with cookie jar if cookies are provided
+	client := http.DefaultClient
+	if len(cookies) > 0 {
+		jar, err := cookiejar.New(nil)
+		if err != nil {
+			return fmt.Errorf("failed to create cookie jar: %w", err)
+		}
+		client = &http.Client{Jar: jar}
+	}
+
+	// Create fetcher with cookies
 	fetcher := &youtube.WatchPageFetcher{
-		Client: http.DefaultClient,
+		Client:  client,
+		Cookies: cookies,
 	}
 
 	err := runInfoWithFetcher(cmd.Context(), cmd.OutOrStdout(), url, fetcher)
@@ -75,6 +102,8 @@ func runInfoWithFetcher(ctx context.Context, w io.Writer, urlStr string, fetcher
 	}
 
 	// Check playability status
+
+	fmt.Println(playerResponse)
 	if playerResponse.PlayabilityStatus.Status != "OK" {
 		reason := playerResponse.PlayabilityStatus.Reason
 		if reason == "" {

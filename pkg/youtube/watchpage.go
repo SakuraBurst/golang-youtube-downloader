@@ -34,11 +34,17 @@ type WatchPage struct {
 // WatchPageFetcher fetches YouTube video watch pages.
 type WatchPageFetcher struct {
 	// Client is the HTTP client to use for requests.
+	// If cookies are provided, the client's cookie jar will be populated.
 	Client *http.Client
 
 	// BaseURL is the base URL for YouTube (used for testing).
 	// If empty, defaults to https://www.youtube.com.
 	BaseURL string
+
+	// Cookies are the HTTP cookies to include with requests.
+	// Use this to provide authentication cookies for age-restricted
+	// or private videos that require login.
+	Cookies []*http.Cookie
 }
 
 // WatchPageURL returns the URL for a video's watch page.
@@ -55,6 +61,14 @@ func (f *WatchPageFetcher) Fetch(ctx context.Context, videoID string) (*WatchPag
 	}
 
 	watchURL := fmt.Sprintf("%s/watch?v=%s&bpctr=%s", baseURL, videoID, bpctrValue)
+
+	// If cookies are provided and client has a cookie jar, populate it
+	if len(f.Cookies) > 0 && f.Client.Jar != nil {
+		parsedURL, err := url.Parse(baseURL)
+		if err == nil {
+			f.Client.Jar.SetCookies(parsedURL, f.Cookies)
+		}
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, watchURL, http.NoBody)
 	if err != nil {
