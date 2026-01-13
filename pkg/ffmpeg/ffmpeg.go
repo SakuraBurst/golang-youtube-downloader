@@ -158,3 +158,60 @@ func MuxStreamsWithContext(ctx context.Context, videoPath, audioPath, outputPath
 
 	return nil
 }
+
+// buildEmbedSubtitlesArgs builds the FFmpeg command arguments for embedding subtitles into a video.
+func buildEmbedSubtitlesArgs(videoPath, subtitlePath, outputPath string) []string {
+	return []string{
+		"-i", videoPath,
+		"-i", subtitlePath,
+		"-c", "copy",
+		"-c:s", "mov_text", // Encode subtitles for MP4 container
+		"-y", // Overwrite output file without asking
+		outputPath,
+	}
+}
+
+// EmbedSubtitles embeds subtitle track into a video file.
+// Uses FFmpeg's mov_text codec for MP4 container compatibility.
+func EmbedSubtitles(videoPath, subtitlePath, outputPath string) error {
+	ffmpegPath, err := GetCliFilePath()
+	if err != nil {
+		return err
+	}
+
+	args := buildEmbedSubtitlesArgs(videoPath, subtitlePath, outputPath)
+	cmd := exec.Command(ffmpegPath, args...)
+
+	// Capture stderr for error messages
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("ffmpeg embed subtitles failed: %w: %s", err, stderr.String())
+	}
+
+	return nil
+}
+
+// EmbedSubtitlesWithContext embeds subtitle track into a video file.
+// Uses FFmpeg's mov_text codec for MP4 container compatibility.
+// The context can be used to cancel the operation.
+func EmbedSubtitlesWithContext(ctx context.Context, videoPath, subtitlePath, outputPath string) error {
+	ffmpegPath, err := GetCliFilePath()
+	if err != nil {
+		return err
+	}
+
+	args := buildEmbedSubtitlesArgs(videoPath, subtitlePath, outputPath)
+	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
+
+	// Capture stderr for error messages
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("ffmpeg embed subtitles failed: %w: %s", err, stderr.String())
+	}
+
+	return nil
+}

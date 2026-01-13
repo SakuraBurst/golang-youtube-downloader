@@ -301,3 +301,88 @@ func TestMuxStreams_ReturnsErrorForMissingInputFiles(t *testing.T) {
 		t.Error("Expected error for missing input files")
 	}
 }
+
+func TestBuildEmbedSubtitlesArgs(t *testing.T) {
+	tests := []struct {
+		name         string
+		videoPath    string
+		subtitlePath string
+		outputPath   string
+		wantArgs     []string
+	}{
+		{
+			name:         "basic subtitle embed",
+			videoPath:    "video.mp4",
+			subtitlePath: "subs.srt",
+			outputPath:   "output.mp4",
+			wantArgs:     []string{"-i", "video.mp4", "-i", "subs.srt", "-c", "copy", "-c:s", "mov_text", "-y", "output.mp4"},
+		},
+		{
+			name:         "paths with spaces",
+			videoPath:    "my video.mp4",
+			subtitlePath: "my subs.srt",
+			outputPath:   "my output.mp4",
+			wantArgs:     []string{"-i", "my video.mp4", "-i", "my subs.srt", "-c", "copy", "-c:s", "mov_text", "-y", "my output.mp4"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := buildEmbedSubtitlesArgs(tt.videoPath, tt.subtitlePath, tt.outputPath)
+			if len(args) != len(tt.wantArgs) {
+				t.Errorf("buildEmbedSubtitlesArgs() = %v, want %v", args, tt.wantArgs)
+				return
+			}
+			for i, arg := range args {
+				if arg != tt.wantArgs[i] {
+					t.Errorf("buildEmbedSubtitlesArgs()[%d] = %v, want %v", i, arg, tt.wantArgs[i])
+				}
+			}
+		})
+	}
+}
+
+func TestEmbedSubtitles_ReturnsErrorWhenFFmpegNotFound(t *testing.T) {
+	// Save current PATH and restore after test
+	oldPath := os.Getenv("PATH")
+	defer func() { _ = os.Setenv("PATH", oldPath) }()
+
+	// Set PATH to an empty directory
+	tmpDir := t.TempDir()
+	_ = os.Setenv("PATH", tmpDir)
+
+	// Save current directory and change to temp dir
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get current directory: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldWd) }()
+
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("Failed to change to temp directory: %v", err)
+	}
+
+	// Should return ErrNotFound
+	err = EmbedSubtitles("video.mp4", "subs.srt", "output.mp4")
+	if err != ErrNotFound {
+		t.Errorf("Expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestEmbedSubtitles_ReturnsErrorForMissingInputFiles(t *testing.T) {
+	// Skip if ffmpeg not available
+	if !IsAvailable() {
+		t.Skip("FFmpeg not available")
+	}
+
+	tmpDir := t.TempDir()
+	videoPath := filepath.Join(tmpDir, "nonexistent_video.mp4")
+	subtitlePath := filepath.Join(tmpDir, "nonexistent_subs.srt")
+	outputPath := filepath.Join(tmpDir, "output.mp4")
+
+	// Should return error for missing input files
+	err := EmbedSubtitles(videoPath, subtitlePath, outputPath)
+	if err == nil {
+		t.Error("Expected error for missing input files")
+	}
+}
