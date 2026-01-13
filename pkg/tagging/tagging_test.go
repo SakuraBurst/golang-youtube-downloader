@@ -3,6 +3,7 @@ package tagging
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/SakuraBurst/golang-youtube-downloader/pkg/youtube"
@@ -234,6 +235,96 @@ func TestGetThumbnailURL_UsesFallbackForEmptyList(t *testing.T) {
 	expected := "https://i.ytimg.com/vi/test123/hqdefault.jpg"
 	if url != expected {
 		t.Errorf("Expected fallback URL %s, got %s", expected, url)
+	}
+}
+
+func TestTagInjector_InjectTags_IncludesDescriptionInComment(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "test.mp3")
+
+	mp3Data := createMinimalMP3()
+	if err := os.WriteFile(testFile, mp3Data, 0o644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	video := &youtube.Video{
+		ID:          "dQw4w9WgXcQ",
+		Title:       "Test Video Title",
+		Description: "This is a test video description with some content.",
+		Author: youtube.Author{
+			Name:      "Test Channel",
+			ChannelID: "UCtest123",
+			URL:       "https://www.youtube.com/channel/UCtest123",
+		},
+	}
+
+	injector := NewTagInjector()
+	err := injector.InjectTags(testFile, video)
+	if err != nil {
+		t.Fatalf("InjectTags failed: %v", err)
+	}
+
+	tags, err := ReadTags(testFile)
+	if err != nil {
+		t.Fatalf("ReadTags failed: %v", err)
+	}
+
+	// Comment should include the video description
+	if !strings.Contains(tags.Comment, video.Description) {
+		t.Errorf("Comment should contain description. Got: %q", tags.Comment)
+	}
+
+	// Comment should also include download info
+	if !strings.Contains(tags.Comment, "Downloaded using golang-youtube-downloader") {
+		t.Errorf("Comment should contain download info. Got: %q", tags.Comment)
+	}
+
+	// Comment should include video URL
+	if !strings.Contains(tags.Comment, video.ID) {
+		t.Errorf("Comment should contain video ID. Got: %q", tags.Comment)
+	}
+}
+
+func TestBuildComment_IncludesDescription(t *testing.T) {
+	video := &youtube.Video{
+		ID:          "abc123",
+		Title:       "Test Video",
+		Description: "A detailed description of the video",
+		Author: youtube.Author{
+			Name: "Test Channel",
+			URL:  "https://youtube.com/channel/test",
+		},
+	}
+
+	comment := BuildComment(video)
+
+	if !strings.Contains(comment, video.Description) {
+		t.Errorf("Comment should contain description. Got: %q", comment)
+	}
+	if !strings.Contains(comment, "Downloaded using golang-youtube-downloader") {
+		t.Errorf("Comment should contain download info. Got: %q", comment)
+	}
+	if !strings.Contains(comment, video.ID) {
+		t.Errorf("Comment should contain video ID. Got: %q", comment)
+	}
+}
+
+func TestBuildComment_HandlesEmptyDescription(t *testing.T) {
+	video := &youtube.Video{
+		ID:          "abc123",
+		Title:       "Test Video",
+		Description: "",
+		Author: youtube.Author{
+			Name: "Test Channel",
+			URL:  "https://youtube.com/channel/test",
+		},
+	}
+
+	comment := BuildComment(video)
+
+	// Should still have download info even with empty description
+	if !strings.Contains(comment, "Downloaded using golang-youtube-downloader") {
+		t.Errorf("Comment should contain download info even with empty description. Got: %q", comment)
 	}
 }
 

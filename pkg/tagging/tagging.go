@@ -199,7 +199,7 @@ func (t *TagInjector) injectMP3Tags(filePath string, video *youtube.Video) error
 	tag.SetAlbum(video.Author.Name) // Use channel name as album by default
 
 	// Set comment with video info
-	comment := buildComment(video)
+	comment := BuildComment(video)
 	tag.AddCommentFrame(id3v2.CommentFrame{
 		Encoding:    id3v2.EncodingUTF8,
 		Language:    "eng",
@@ -224,7 +224,7 @@ func (t *TagInjector) injectM4ATags(filePath string, video *youtube.Video) error
 		Title:   video.Title,
 		Artist:  video.Author.Name,
 		Album:   video.Author.Name,
-		Comment: buildComment(video),
+		Comment: BuildComment(video),
 	}
 	return nil
 }
@@ -233,15 +233,27 @@ func (t *TagInjector) injectM4ATags(filePath string, video *youtube.Video) error
 // In production, this would be replaced with actual file manipulation.
 var m4aTagStore = make(map[string]*Tags)
 
-// buildComment builds a comment string from video metadata.
-func buildComment(video *youtube.Video) string {
-	return fmt.Sprintf(
+// BuildComment builds a comment string from video metadata.
+// Includes the video description (if available) and download info.
+func BuildComment(video *youtube.Video) string {
+	var sb strings.Builder
+
+	// Add description if available
+	if video.Description != "" {
+		sb.WriteString(video.Description)
+		sb.WriteString("\n\n---\n\n")
+	}
+
+	// Add download info
+	sb.WriteString(fmt.Sprintf(
 		"Downloaded using golang-youtube-downloader\nVideo: %s\nVideo URL: https://www.youtube.com/watch?v=%s\nChannel: %s\nChannel URL: %s",
 		video.Title,
 		video.ID,
 		video.Author.Name,
 		video.Author.URL,
-	)
+	))
+
+	return sb.String()
 }
 
 // ReadTags reads metadata tags from a media file.
