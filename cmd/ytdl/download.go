@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 
 	"github.com/SakuraBurst/golang-youtube-downloader/pkg/download"
@@ -213,10 +214,31 @@ func downloadSingleVideo(
 func downloadSingleStream(ctx context.Context, w io.Writer, url, outputPath string, downloader *download.Downloader) error {
 	_, _ = fmt.Fprintf(w, "Downloading to: %s\n", outputPath)
 
+	// Create a progress bar
+	bar := progressbar.NewOptions64(
+		-1, // Unknown size initially
+		progressbar.OptionSetWriter(w),
+		progressbar.OptionEnableColorCodes(true),
+		progressbar.OptionShowBytes(true),
+		progressbar.OptionSetWidth(40),
+		progressbar.OptionSetDescription("Downloading"),
+		progressbar.OptionSetTheme(progressbar.Theme{
+			Saucer:        "[green]=[reset]",
+			SaucerHead:    "[green]>[reset]",
+			SaucerPadding: " ",
+			BarStart:      "[",
+			BarEnd:        "]",
+		}),
+		progressbar.OptionOnCompletion(func() {
+			_, _ = fmt.Fprintln(w)
+		}),
+	)
+
 	progressCallback := func(p download.Progress) {
-		if p.Total > 0 {
-			_, _ = fmt.Fprintf(w, "\rProgress: %.1f%%", p.Percentage())
+		if p.Total > 0 && bar.GetMax64() != p.Total {
+			bar.ChangeMax64(p.Total)
 		}
+		_ = bar.Set64(p.Downloaded)
 	}
 
 	err := downloader.DownloadStream(ctx, url, outputPath, progressCallback)
@@ -224,7 +246,8 @@ func downloadSingleStream(ctx context.Context, w io.Writer, url, outputPath stri
 		return fmt.Errorf("download failed: %w", err)
 	}
 
-	_, _ = fmt.Fprintf(w, "\nDownload complete: %s\n", outputPath)
+	_ = bar.Finish()
+	_, _ = fmt.Fprintf(w, "Download complete: %s\n", outputPath)
 	return nil
 }
 
@@ -268,17 +291,17 @@ func downloadAndMux(
 	}
 	defer func() { _ = os.RemoveAll(tempDir) }()
 
-	// Download video stream
+	// Download video stream with progress bar
 	videoPath := filepath.Join(tempDir, "video."+string(option.VideoStream.Container))
 	_, _ = fmt.Fprintf(w, "Downloading video stream...\n")
-	if err := downloader.DownloadStream(ctx, option.VideoStream.URL, videoPath, nil); err != nil {
+	if err := downloadStreamWithProgress(ctx, w, downloader, option.VideoStream.URL, videoPath, "Video"); err != nil {
 		return fmt.Errorf("failed to download video: %w", err)
 	}
 
-	// Download audio stream
+	// Download audio stream with progress bar
 	audioPath := filepath.Join(tempDir, "audio."+string(option.AudioStream.Container))
 	_, _ = fmt.Fprintf(w, "Downloading audio stream...\n")
-	if err := downloader.DownloadStream(ctx, option.AudioStream.URL, audioPath, nil); err != nil {
+	if err := downloadStreamWithProgress(ctx, w, downloader, option.AudioStream.URL, audioPath, "Audio"); err != nil {
 		return fmt.Errorf("failed to download audio: %w", err)
 	}
 
@@ -293,6 +316,43 @@ func downloadAndMux(
 	}
 
 	_, _ = fmt.Fprintf(w, "Download complete: %s\n", outputPath)
+	return nil
+}
+
+// downloadStreamWithProgress downloads a stream with a progress bar.
+func downloadStreamWithProgress(ctx context.Context, w io.Writer, downloader *download.Downloader, url, filePath, description string) error {
+	bar := progressbar.NewOptions64(
+		-1,
+		progressbar.OptionSetWriter(w),
+		progressbar.OptionEnableColorCodes(true),
+		progressbar.OptionShowBytes(true),
+		progressbar.OptionSetWidth(40),
+		progressbar.OptionSetDescription(description),
+		progressbar.OptionSetTheme(progressbar.Theme{
+			Saucer:        "[green]=[reset]",
+			SaucerHead:    "[green]>[reset]",
+			SaucerPadding: " ",
+			BarStart:      "[",
+			BarEnd:        "]",
+		}),
+		progressbar.OptionOnCompletion(func() {
+			_, _ = fmt.Fprintln(w)
+		}),
+	)
+
+	progressCallback := func(p download.Progress) {
+		if p.Total > 0 && bar.GetMax64() != p.Total {
+			bar.ChangeMax64(p.Total)
+		}
+		_ = bar.Set64(p.Downloaded)
+	}
+
+	err := downloader.DownloadStream(ctx, url, filePath, progressCallback)
+	if err != nil {
+		return err
+	}
+
+	_ = bar.Finish()
 	return nil
 }
 
