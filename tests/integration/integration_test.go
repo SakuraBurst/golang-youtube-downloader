@@ -378,3 +378,161 @@ func TestIntegration_FetchVideoWithStreams(t *testing.T) {
 		t.Log("Warning: No streams have direct URLs (may require signature decryption)")
 	}
 }
+
+// TestIntegration_FetchVideoFromURL tests the full flow: parse URL → resolve query → fetch video info.
+// This tests various URL formats that YouTube supports.
+func TestIntegration_FetchVideoFromURL(t *testing.T) {
+	SkipIfNoIntegration(t)
+
+	fixtures := DefaultFixtures()
+	ctx, cancel := NewTestContext(t)
+	defer cancel()
+
+	client := NewTestClient(t)
+
+	// Test various URL formats that should all resolve to the same video
+	testCases := []struct {
+		name string
+		url  string
+	}{
+		{"standard watch URL", "https://www.youtube.com/watch?v=" + fixtures.VideoID},
+		{"short URL", "https://youtu.be/" + fixtures.VideoID},
+		{"embedded URL", "https://www.youtube.com/embed/" + fixtures.VideoID},
+		{"video ID only", fixtures.VideoID},
+		{"watch URL with extra params", "https://www.youtube.com/watch?v=" + fixtures.VideoID + "&list=PLtest&t=10"},
+	}
+
+	for _, testCase := range testCases {
+		testCase := testCase // capture for parallel subtests
+		t.Run(testCase.name, func(t *testing.T) {
+			// Parse the URL/query to extract video ID
+			result, err := youtube.ResolveQuery(testCase.url)
+			RequireNoError(t, err, "Failed to resolve query")
+
+			if result.Type != youtube.QueryTypeVideo {
+				t.Errorf("Expected query type %v, got %v", youtube.QueryTypeVideo, result.Type)
+			}
+
+			if result.VideoID != fixtures.VideoID {
+				t.Errorf("Expected video ID %q, got %q", fixtures.VideoID, result.VideoID)
+			}
+		})
+	}
+
+	// Now test the full fetch flow with one URL
+	t.Run("full fetch flow", func(t *testing.T) {
+		watchURL := "https://www.youtube.com/watch?v=" + fixtures.VideoID
+
+		// Step 1: Parse URL
+		result, err := youtube.ResolveQuery(watchURL)
+		RequireNoError(t, err, "Failed to resolve query")
+
+		if result.VideoID != fixtures.VideoID {
+			t.Fatalf("Expected video ID %q, got %q", fixtures.VideoID, result.VideoID)
+		}
+
+		// Step 2: Fetch video info
+		video := client.FetchVideo(ctx, t, result.VideoID)
+
+		// Step 3: Verify video details
+		AssertVideoValid(t, video)
+
+		if video.ID != fixtures.VideoID {
+			t.Errorf("Expected video ID %q, got %q", fixtures.VideoID, video.ID)
+		}
+
+		// Verify additional fields are populated
+		if video.Duration == 0 {
+			t.Error("Expected video duration to be set")
+		}
+		if video.ViewCount == 0 {
+			t.Error("Expected video view count to be set")
+		}
+		if len(video.Thumbnails) == 0 {
+			t.Error("Expected video thumbnails to be set")
+		}
+		if video.Author.ChannelID == "" {
+			t.Error("Expected author channel ID to be set")
+		}
+
+		t.Logf("Successfully fetched video from URL:")
+		t.Logf("  Title: %q", video.Title)
+		t.Logf("  Author: %q (%s)", video.Author.Name, video.Author.ChannelID)
+		t.Logf("  Duration: %v", video.Duration)
+		t.Logf("  Views: %d", video.ViewCount)
+		t.Logf("  Thumbnails: %d", len(video.Thumbnails))
+	})
+}
+
+// TestIntegration_FetchVideoMetadata tests that video metadata is fully populated.
+func TestIntegration_FetchVideoMetadata(t *testing.T) {
+	SkipIfNoIntegration(t)
+
+	fixtures := DefaultFixtures()
+	ctx, cancel := NewTestContext(t)
+	defer cancel()
+
+	tc := NewTestClient(t)
+	video := tc.FetchVideo(ctx, t, fixtures.VideoID)
+
+	// Verify all expected metadata fields
+	AssertVideoValid(t, video)
+
+	// Core fields
+	if video.ID == "" {
+		t.Error("Video ID should not be empty")
+	}
+	if video.Title == "" {
+		t.Error("Video title should not be empty")
+	}
+	if video.Description == "" {
+		t.Error("Video description should not be empty")
+	}
+	if video.Duration == 0 {
+		t.Error("Video duration should not be zero")
+	}
+
+	// Author fields
+	if video.Author.Name == "" {
+		t.Error("Author name should not be empty")
+	}
+	if video.Author.ChannelID == "" {
+		t.Error("Author channel ID should not be empty")
+	}
+	if video.Author.URL == "" {
+		t.Error("Author URL should not be empty")
+	}
+
+	// Thumbnails
+	if len(video.Thumbnails) == 0 {
+		t.Error("Video should have thumbnails")
+	} else {
+		// Verify thumbnail fields
+		for i, thumb := range video.Thumbnails {
+			if thumb.URL == "" {
+				t.Errorf("Thumbnail %d URL should not be empty", i)
+			}
+			if thumb.Width == 0 {
+				t.Errorf("Thumbnail %d width should not be zero", i)
+			}
+			if thumb.Height == 0 {
+				t.Errorf("Thumbnail %d height should not be zero", i)
+			}
+		}
+	}
+
+	// View count (Rick Roll should have billions of views)
+	if video.ViewCount < 1000000 {
+		t.Logf("Warning: View count %d seems low for this video", video.ViewCount)
+	}
+
+	t.Logf("Video metadata verified:")
+	t.Logf("  ID: %s", video.ID)
+	t.Logf("  Title: %s", video.Title)
+	t.Logf("  Duration: %v", video.Duration)
+	t.Logf("  Views: %d", video.ViewCount)
+	t.Logf("  Author: %s", video.Author.Name)
+	t.Logf("  Channel ID: %s", video.Author.ChannelID)
+	t.Logf("  Thumbnails: %d", len(video.Thumbnails))
+	t.Logf("  Description length: %d chars", len(video.Description))
+}
