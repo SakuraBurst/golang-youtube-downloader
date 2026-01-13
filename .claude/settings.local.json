@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bd ready:*)",
+      "Bash(bd update:*)",
+      "Bash(go build:*)",
+      "Bash(go test:*)",
+      "Bash(golangci-lint run:*)",
+      "Bash(golangci-lint version:*)",
+      "WebSearch",
+      "Bash(golangci-lint help:*)",
+      "Bash(make build:*)",
+      "Bash(make test:*)",
+      "Bash(make lint:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nAdd Makefile and update golangci-lint config to v2 \\(bd-9du.4\\)\n\n- Created Makefile with build, test, lint, clean targets\n- Updated .golangci.yml to v2 format for golangci-lint v2.x\n- Moved formatters \\(gofmt, goimports\\) to formatters section\n- Removed deprecated linters \\(gosimple merged into staticcheck, exportloopref removed in Go 1.22+\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git push)",
+      "Bash(bd close:*)",
+      "Bash(bd sync:*)",
+      "Bash(bd show:*)",
+      "Bash(go get:*)",
+      "Bash(git commit:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(grep:*)",
+      "Bash(dir /s \"C:\\\\Users\\\\colap\\\\AppData\\\\Local\\\\Temp\\\\YoutubeDownloader\")",
+      "Bash(findstr:*)",
+      "Bash(bd list:*)",
+      "Bash(gofmt:*)"
+    ]
+  }
+}

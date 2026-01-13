@@ -193,9 +193,6 @@ Tasks are organized into epics. Work through tasks in priority order (P0 first):
 - `71n` - Playlist Support (✅ COMPLETED)
 - `d1m` - **CLI Integration** ⚠️ NEW - Wire commands to real implementation
 - `oul` - **Integration Testing** ⚠️ NEW - E2E tests with real YouTube URLs
-
-**P2 - Enhancements:**
-
 - `tb4` - Metadata Tagging (1/3 done)
 - `pv5` - Subtitles Support
 
