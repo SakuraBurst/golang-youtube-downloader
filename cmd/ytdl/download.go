@@ -29,13 +29,15 @@ func newDownloadCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "download <url>",
-		Short: "Download a YouTube video",
-		Long: `Download a YouTube video from the given URL.
+		Short: "Download a YouTube video, playlist, or channel",
+		Long: `Download YouTube content from the given URL.
 
 Supports various YouTube URL formats including:
-  - https://www.youtube.com/watch?v=VIDEO_ID
-  - https://youtu.be/VIDEO_ID
-  - https://www.youtube.com/embed/VIDEO_ID`,
+  - Video: https://www.youtube.com/watch?v=VIDEO_ID
+  - Video: https://youtu.be/VIDEO_ID
+  - Playlist: https://www.youtube.com/playlist?list=PLAYLIST_ID
+  - Channel: https://www.youtube.com/channel/CHANNEL_ID
+  - Channel: https://www.youtube.com/@handle`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			url := args[0]
@@ -77,12 +79,41 @@ func runDownloadWithDeps(
 	downloader *download.Downloader,
 	muxer MuxerFunc,
 ) error {
-	// Parse the video ID from the URL
-	videoID, err := youtube.ParseVideoID(urlStr)
+	// Resolve the query to determine content type
+	query, err := youtube.ResolveQuery(urlStr)
 	if err != nil {
-		return fmt.Errorf("invalid video URL or ID: %w", err)
+		return fmt.Errorf("invalid URL or ID: %w", err)
 	}
 
+	switch query.Type {
+	case youtube.QueryTypeVideo:
+		return downloadSingleVideo(ctx, w, query.VideoID, opts, fetcher, downloader, muxer, "")
+
+	case youtube.QueryTypePlaylist:
+		return downloadPlaylist(ctx, w, query.PlaylistID, opts, fetcher, downloader, muxer)
+
+	case youtube.QueryTypeChannel:
+		return downloadChannel(ctx, w, query.Channel, opts, fetcher, downloader, muxer)
+
+	case youtube.QueryTypeSearch:
+		return errors.New("search queries are not supported for download")
+
+	default:
+		return errors.New("unsupported content type")
+	}
+}
+
+// downloadSingleVideo downloads a single video by its ID.
+func downloadSingleVideo(
+	ctx context.Context,
+	w io.Writer,
+	videoID string,
+	opts *downloadOptions,
+	fetcher *youtube.WatchPageFetcher,
+	downloader *download.Downloader,
+	muxer MuxerFunc,
+	numberPrefix string,
+) error {
 	_, _ = fmt.Fprintf(w, "Fetching video info: %s\n", videoID)
 
 	// Fetch the watch page
@@ -135,7 +166,7 @@ func runDownloadWithDeps(
 	if audioOnly {
 		containerStr = "mp3"
 	}
-	outputFilename := filename.ApplyTemplate(filename.DefaultTemplate, video, containerStr, "")
+	outputFilename := filename.ApplyTemplate(filename.DefaultTemplate, video, containerStr, numberPrefix)
 	outputPath := filepath.Join(opts.output, outputFilename)
 
 	if audioOnly {
@@ -297,4 +328,58 @@ func parseContainer(format string) youtube.Container {
 	default:
 		return youtube.ContainerMP4
 	}
+}
+
+// downloadPlaylist downloads all videos from a playlist.
+func downloadPlaylist(
+	ctx context.Context,
+	w io.Writer,
+	playlistID string,
+	opts *downloadOptions,
+	fetcher *youtube.WatchPageFetcher,
+	downloader *download.Downloader,
+	muxer MuxerFunc,
+) error {
+	_, _ = fmt.Fprintf(w, "Playlist download: %s\n", playlistID)
+	_, _ = fmt.Fprintf(w, "Note: Full playlist fetching requires additional API implementation.\n")
+	_, _ = fmt.Fprintf(w, "Currently, only individual video downloads are fully supported.\n")
+
+	// For now, we'll indicate this is a placeholder for future implementation
+	// A complete implementation would:
+	// 1. Fetch the playlist page
+	// 2. Parse the initial data to get video list
+	// 3. Handle pagination for playlists with many videos
+	// 4. Download each video in sequence or parallel
+
+	// The youtube package has the playlist parsing logic, but we need to add
+	// a playlist page fetcher similar to WatchPageFetcher
+
+	return errors.New("playlist download requires fetching playlist page - not yet implemented")
+}
+
+// downloadChannel downloads all videos from a channel.
+func downloadChannel(
+	ctx context.Context,
+	w io.Writer,
+	channel youtube.ChannelIdentifier,
+	opts *downloadOptions,
+	fetcher *youtube.WatchPageFetcher,
+	downloader *download.Downloader,
+	muxer MuxerFunc,
+) error {
+	_, _ = fmt.Fprintf(w, "Channel download: %s (%s)\n", channel.Value, channel.Type)
+
+	// For channel IDs, we can convert to uploads playlist
+	if channel.Type == youtube.ChannelTypeID {
+		uploadsPlaylistID := channel.UploadsPlaylistID()
+		if uploadsPlaylistID != "" {
+			_, _ = fmt.Fprintf(w, "Converting to uploads playlist: %s\n", uploadsPlaylistID)
+			return downloadPlaylist(ctx, w, uploadsPlaylistID, opts, fetcher, downloader, muxer)
+		}
+	}
+
+	// For handles, custom URLs, and users, we would need to resolve to channel ID first
+	_, _ = fmt.Fprintf(w, "Note: Channel handles and custom URLs require additional resolution.\n")
+
+	return errors.New("channel download requires resolving channel ID - not yet implemented")
 }

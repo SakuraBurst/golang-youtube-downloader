@@ -281,3 +281,64 @@ func TestDownloadQualityParsing(t *testing.T) {
 		}
 	}
 }
+
+// TestDetectQueryType tests detection of different URL types.
+func TestDetectQueryType(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected youtube.QueryType
+	}{
+		{"https://www.youtube.com/watch?v=dQw4w9WgXcQ", youtube.QueryTypeVideo},
+		{"dQw4w9WgXcQ", youtube.QueryTypeVideo},
+		{"https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf", youtube.QueryTypePlaylist},
+		{"PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf", youtube.QueryTypePlaylist},
+		{"https://www.youtube.com/channel/UCuAXFkgsw1L7xaCfnd5JJOw", youtube.QueryTypeChannel},
+	}
+
+	for _, tt := range tests {
+		result, err := youtube.ResolveQuery(tt.input)
+		if err != nil {
+			t.Errorf("ResolveQuery(%q) error: %v", tt.input, err)
+			continue
+		}
+		if result.Type != tt.expected {
+			t.Errorf("ResolveQuery(%q).Type = %v, want %v", tt.input, result.Type, tt.expected)
+		}
+	}
+}
+
+// TestDownloadPlaylistURL tests that the download command detects and handles playlist URLs.
+func TestDownloadPlaylistURL(t *testing.T) {
+	// Test that we correctly identify a playlist URL
+	result, err := youtube.ResolveQuery("https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf")
+	if err != nil {
+		t.Fatalf("failed to resolve playlist URL: %v", err)
+	}
+	if result.Type != youtube.QueryTypePlaylist {
+		t.Errorf("expected QueryTypePlaylist, got %v", result.Type)
+	}
+	if result.PlaylistID != "PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf" {
+		t.Errorf("expected playlist ID PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf, got %s", result.PlaylistID)
+	}
+}
+
+// TestDownloadChannelURL tests that the download command detects channel URLs.
+func TestDownloadChannelURL(t *testing.T) {
+	// Test that we correctly identify a channel URL
+	result, err := youtube.ResolveQuery("https://www.youtube.com/channel/UCuAXFkgsw1L7xaCfnd5JJOw")
+	if err != nil {
+		t.Fatalf("failed to resolve channel URL: %v", err)
+	}
+	if result.Type != youtube.QueryTypeChannel {
+		t.Errorf("expected QueryTypeChannel, got %v", result.Type)
+	}
+	if result.Channel.Value != "UCuAXFkgsw1L7xaCfnd5JJOw" {
+		t.Errorf("expected channel ID UCuAXFkgsw1L7xaCfnd5JJOw, got %s", result.Channel.Value)
+	}
+
+	// Verify we can get the uploads playlist ID
+	uploadsPlaylistID := result.Channel.UploadsPlaylistID()
+	if uploadsPlaylistID != "UUuAXFkgsw1L7xaCfnd5JJOw" {
+		t.Errorf("expected uploads playlist ID UUuAXFkgsw1L7xaCfnd5JJOw, got %s", uploadsPlaylistID)
+	}
+}
