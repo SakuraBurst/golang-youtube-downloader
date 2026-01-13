@@ -64,7 +64,12 @@ func runDownload(cmd *cobra.Command, url string, opts *downloadOptions) error {
 	}
 	downloader := download.NewDownloader(http.DefaultClient)
 
-	return runDownloadWithDeps(cmd.Context(), cmd.OutOrStdout(), url, opts, fetcher, downloader, ffmpeg.MuxStreamsWithContext)
+	err := runDownloadWithDeps(cmd.Context(), cmd.OutOrStdout(), url, opts, fetcher, downloader, ffmpeg.MuxStreamsWithContext)
+	if err != nil {
+		// Wrap the error with user-friendly message
+		return WrapError(err)
+	}
+	return nil
 }
 
 // MuxerFunc is a function type for muxing video and audio streams.

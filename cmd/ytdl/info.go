@@ -43,7 +43,12 @@ func runInfo(cmd *cobra.Command, url string) error {
 		Client: http.DefaultClient,
 	}
 
-	return runInfoWithFetcher(cmd.Context(), cmd.OutOrStdout(), url, fetcher)
+	err := runInfoWithFetcher(cmd.Context(), cmd.OutOrStdout(), url, fetcher)
+	if err != nil {
+		// Wrap the error with user-friendly message
+		return WrapError(err)
+	}
+	return nil
 }
 
 // runInfoWithFetcher implements the info command logic with a configurable fetcher.
