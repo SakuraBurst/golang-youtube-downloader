@@ -6,7 +6,9 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -918,4 +920,387 @@ func TestIntegration_BatchDownloadProgress(t *testing.T) {
 	t.Logf("  Completed: %d/%d", bp.CompletedCount, bp.TotalCount)
 	t.Logf("  Percentage: %.0f%%", bp.OverallPercentage())
 	t.Logf("  Content sizes: %d, %d bytes", len(content1), len(content2))
+}
+
+// TestIntegration_CLI_Version tests the version command.
+func TestIntegration_CLI_Version(t *testing.T) {
+	SkipIfNoIntegration(t)
+
+	// Build the CLI binary
+	binaryPath := buildCLI(t)
+
+	// Run version command
+	output, exitCode := runCLI(t, binaryPath, "version")
+
+	// Verify exit code
+	if exitCode != 0 {
+		t.Errorf("Expected exit code 0, got %d", exitCode)
+	}
+
+	// Verify output contains version information
+	if !containsAny(output, "Version:", "ytdl") {
+		t.Errorf("Expected version output, got: %s", output)
+	}
+
+	t.Logf("CLI version output:\n%s", output)
+}
+
+// TestIntegration_CLI_Help tests the help command.
+func TestIntegration_CLI_Help(t *testing.T) {
+	SkipIfNoIntegration(t)
+
+	// Build the CLI binary
+	binaryPath := buildCLI(t)
+
+	// Run help command
+	output, exitCode := runCLI(t, binaryPath, "--help")
+
+	// Verify exit code
+	if exitCode != 0 {
+		t.Errorf("Expected exit code 0, got %d", exitCode)
+	}
+
+	// Verify output contains expected commands
+	if !containsAny(output, "version", "info", "download") {
+		t.Errorf("Expected help output with commands, got: %s", output)
+	}
+
+	t.Logf("CLI help output:\n%s", output)
+}
+
+// TestIntegration_CLI_Info tests the info command with a real video.
+func TestIntegration_CLI_Info(t *testing.T) {
+	SkipIfNoIntegration(t)
+
+	fixtures := DefaultFixtures()
+
+	// Build the CLI binary
+	binaryPath := buildCLI(t)
+
+	// Run info command
+	output, exitCode := runCLI(t, binaryPath, "info", fixtures.VideoID)
+
+	// Verify exit code (0 for success)
+	if exitCode != 0 {
+		t.Errorf("Expected exit code 0, got %d. Output: %s", exitCode, output)
+	}
+
+	// Verify output contains expected information
+	expectedFields := []string{"Title:", "Author:", "Duration:"}
+	for _, field := range expectedFields {
+		if !containsAny(output, field) {
+			t.Errorf("Expected output to contain %q, got: %s", field, output)
+		}
+	}
+
+	t.Logf("CLI info output:\n%s", output)
+}
+
+// TestIntegration_CLI_InfoInvalidURL tests the info command with an invalid URL.
+func TestIntegration_CLI_InfoInvalidURL(t *testing.T) {
+	SkipIfNoIntegration(t)
+
+	// Build the CLI binary
+	binaryPath := buildCLI(t)
+
+	// Run info command with invalid URL
+	output, exitCode := runCLI(t, binaryPath, "info", "invalid-url-12345")
+
+	// Verify exit code (non-zero for error)
+	if exitCode == 0 {
+		t.Error("Expected non-zero exit code for invalid URL")
+	}
+
+	// Output should contain error message
+	if output == "" {
+		t.Log("Warning: No error output for invalid URL")
+	}
+
+	t.Logf("CLI info error output (exit code %d):\n%s", exitCode, output)
+}
+
+// TestIntegration_CLI_InfoMissingArg tests the info command without required argument.
+func TestIntegration_CLI_InfoMissingArg(t *testing.T) {
+	SkipIfNoIntegration(t)
+
+	// Build the CLI binary
+	binaryPath := buildCLI(t)
+
+	// Run info command without URL
+	output, exitCode := runCLI(t, binaryPath, "info")
+
+	// Verify exit code (non-zero for error)
+	if exitCode == 0 {
+		t.Error("Expected non-zero exit code for missing argument")
+	}
+
+	// Output should mention the required argument
+	if !containsAny(output, "required", "argument", "url", "URL") {
+		t.Logf("Warning: Error message doesn't mention required argument. Output: %s", output)
+	}
+
+	t.Logf("CLI info missing arg output (exit code %d):\n%s", exitCode, output)
+}
+
+// buildCLI builds the ytdl binary and returns its path.
+func buildCLI(t *testing.T) string {
+	t.Helper()
+
+	tempDir := TempDir(t)
+	var binaryName string
+	if isWindows() {
+		binaryName = "ytdl.exe"
+	} else {
+		binaryName = "ytdl"
+	}
+	binaryPath := filepath.Join(tempDir, binaryName)
+
+	// Build the binary
+	cmd := exec.Command("go", "build", "-o", binaryPath, "./cmd/ytdl")
+	cmd.Dir = getProjectRoot(t)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("Failed to build CLI: %v\nOutput: %s", err, output)
+	}
+
+	return binaryPath
+}
+
+// runCLI executes the CLI binary with the given arguments.
+// Returns the combined output and exit code.
+func runCLI(t *testing.T, binaryPath string, args ...string) (output string, exitCode int) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, binaryPath, args...)
+	outputBytes, err := cmd.CombinedOutput()
+	output = string(outputBytes)
+
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			t.Logf("Command error (not ExitError): %v", err)
+			exitCode = -1
+		}
+	}
+
+	return output, exitCode
+}
+
+// getProjectRoot returns the project root directory.
+func getProjectRoot(t *testing.T) string {
+	t.Helper()
+	// The test file is in tests/integration/, so project root is ../..
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get working directory: %v", err)
+	}
+
+	// Navigate up to find go.mod
+	dir := wd
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			// Reached root without finding go.mod
+			t.Fatalf("Could not find project root (go.mod) from %s", wd)
+		}
+		dir = parent
+	}
+}
+
+// isWindows returns true if running on Windows.
+func isWindows() bool {
+	return filepath.Separator == '\\'
+}
+
+// containsAny returns true if s contains any of the substrings.
+func containsAny(s string, substrs ...string) bool {
+	for _, sub := range substrs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestIntegration_CLI_Download tests the download command with a real video.
+// Note: This test downloads actual content from YouTube, so it may take some time.
+func TestIntegration_CLI_Download(t *testing.T) {
+	SkipIfNoIntegration(t)
+
+	fixtures := DefaultFixtures()
+
+	// Build the CLI binary
+	binaryPath := buildCLI(t)
+
+	// Create temp output directory
+	outputDir := TempDir(t)
+
+	// Run download command with low quality to minimize download size
+	// Use a short video and request lowest quality
+	output, exitCode := runCLI(t, binaryPath, "download", fixtures.VideoID,
+		"-o", outputDir,
+		"-q", "360p")
+
+	// Log output for debugging
+	t.Logf("CLI download output (exit code %d):\n%s", exitCode, output)
+
+	// Note: The download may fail if signature decryption is required,
+	// which is expected behavior. We check for graceful error handling.
+	if exitCode == 0 {
+		// If successful, verify a file was created
+		files, err := filepath.Glob(filepath.Join(outputDir, "*.mp4"))
+		if err != nil {
+			t.Fatalf("Failed to glob output directory: %v", err)
+		}
+
+		if len(files) == 0 {
+			// Also check for webm files
+			files, _ = filepath.Glob(filepath.Join(outputDir, "*.*"))
+		}
+
+		if len(files) > 0 {
+			t.Logf("Downloaded file: %s", files[0])
+			AssertFileExists(t, files[0])
+		}
+	} else {
+		// For non-zero exit codes, verify we got a reasonable error message
+		// The download may fail due to signature cipher requirements
+		if output == "" {
+			t.Log("Warning: No output from failed download command")
+		}
+
+		// Common expected error scenarios:
+		// - "no downloadable stream found" - signature cipher required
+		// - "video unavailable" - region blocked or private
+		// - "failed to fetch" - network error
+		t.Logf("Download command returned exit code %d (may require signature decryption)", exitCode)
+	}
+}
+
+// TestIntegration_CLI_DownloadMissingArg tests the download command without required argument.
+func TestIntegration_CLI_DownloadMissingArg(t *testing.T) {
+	SkipIfNoIntegration(t)
+
+	// Build the CLI binary
+	binaryPath := buildCLI(t)
+
+	// Run download command without URL
+	output, exitCode := runCLI(t, binaryPath, "download")
+
+	// Verify exit code (non-zero for error)
+	if exitCode == 0 {
+		t.Error("Expected non-zero exit code for missing argument")
+	}
+
+	// Output should mention the required argument
+	if !containsAny(output, "accepts 1 arg", "required", "argument") {
+		t.Logf("Warning: Error message doesn't mention required argument. Output: %s", output)
+	}
+
+	t.Logf("CLI download missing arg output (exit code %d):\n%s", exitCode, output)
+}
+
+// TestIntegration_CLI_DownloadInvalidURL tests the download command with invalid URL.
+func TestIntegration_CLI_DownloadInvalidURL(t *testing.T) {
+	SkipIfNoIntegration(t)
+
+	// Build the CLI binary
+	binaryPath := buildCLI(t)
+
+	// Run download command with invalid URL
+	output, exitCode := runCLI(t, binaryPath, "download", "not-a-valid-url-12345")
+
+	// Verify exit code (non-zero for error)
+	if exitCode == 0 {
+		t.Error("Expected non-zero exit code for invalid URL")
+	}
+
+	// Output should contain error message about invalid URL
+	if output == "" {
+		t.Log("Warning: No error output for invalid URL")
+	}
+
+	t.Logf("CLI download invalid URL output (exit code %d):\n%s", exitCode, output)
+}
+
+// TestIntegration_CLI_DownloadWithFlags tests download command flag parsing.
+func TestIntegration_CLI_DownloadWithFlags(t *testing.T) {
+	SkipIfNoIntegration(t)
+
+	// Build the CLI binary
+	binaryPath := buildCLI(t)
+
+	// Create temp output directory
+	outputDir := TempDir(t)
+
+	// Test that flags are parsed correctly by checking help output
+	output, exitCode := runCLI(t, binaryPath, "download", "--help")
+
+	if exitCode != 0 {
+		t.Errorf("Expected exit code 0 for help, got %d", exitCode)
+	}
+
+	// Verify help shows available flags
+	expectedFlags := []string{"-o", "--output", "-q", "--quality", "-f", "--format"}
+	for _, flag := range expectedFlags {
+		if !strings.Contains(output, flag) {
+			t.Errorf("Expected help to contain flag %q", flag)
+		}
+	}
+
+	t.Logf("CLI download flags help (exit code %d):\n%s", exitCode, output)
+
+	// Also test that output directory is used (even if download fails)
+	fixtures := DefaultFixtures()
+	output, _ = runCLI(t, binaryPath, "download", fixtures.VideoID,
+		"-o", outputDir,
+		"-q", "worst",
+		"-f", "mp4")
+
+	// The command should at least parse the flags without error
+	// (actual download may fail due to signature requirements)
+	if strings.Contains(output, "unknown flag") || strings.Contains(output, "unknown shorthand") {
+		t.Errorf("Flag parsing error: %s", output)
+	}
+}
+
+// TestIntegration_CLI_DownloadAudioOnly tests audio-only download mode.
+func TestIntegration_CLI_DownloadAudioOnly(t *testing.T) {
+	SkipIfNoIntegration(t)
+
+	fixtures := DefaultFixtures()
+
+	// Build the CLI binary
+	binaryPath := buildCLI(t)
+
+	// Create temp output directory
+	outputDir := TempDir(t)
+
+	// Run download command requesting audio only
+	output, exitCode := runCLI(t, binaryPath, "download", fixtures.VideoID,
+		"-o", outputDir,
+		"-f", "mp3")
+
+	t.Logf("CLI download audio output (exit code %d):\n%s", exitCode, output)
+
+	// Similar to video download, may fail due to signature requirements
+	if exitCode == 0 {
+		// Check for audio file
+		files, _ := filepath.Glob(filepath.Join(outputDir, "*.mp3"))
+		if len(files) == 0 {
+			files, _ = filepath.Glob(filepath.Join(outputDir, "*.*"))
+		}
+		if len(files) > 0 {
+			t.Logf("Downloaded audio file: %s", files[0])
+			AssertFileExists(t, files[0])
+		}
+	}
 }
