@@ -140,6 +140,103 @@ func TestTagInjector_InjectTags_M4AFile(t *testing.T) {
 	}
 }
 
+func TestTagInjector_InjectThumbnail_MP3(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "test.mp3")
+
+	mp3Data := createMinimalMP3()
+	if err := os.WriteFile(testFile, mp3Data, 0o644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	video := &youtube.Video{
+		ID:    "dQw4w9WgXcQ",
+		Title: "Test Video",
+		Author: youtube.Author{
+			Name: "Test Channel",
+		},
+		Thumbnails: []youtube.Thumbnail{
+			{URL: "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg", Width: 480, Height: 360},
+			{URL: "https://i.ytimg.com/vi/dQw4w9WgXcQ/maxresdefault.jpg", Width: 1280, Height: 720},
+		},
+	}
+
+	injector := NewTagInjector()
+
+	// Inject thumbnail - should download and embed highest quality thumbnail
+	err := injector.InjectThumbnail(testFile, video)
+	if err != nil {
+		t.Fatalf("InjectThumbnail failed: %v", err)
+	}
+
+	// Verify thumbnail was embedded
+	hasThumbnail, err := HasEmbeddedThumbnail(testFile)
+	if err != nil {
+		t.Fatalf("HasEmbeddedThumbnail failed: %v", err)
+	}
+	if !hasThumbnail {
+		t.Error("Expected thumbnail to be embedded in MP3 file")
+	}
+}
+
+func TestTagInjector_InjectThumbnail_FallbackURL(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "test.mp3")
+
+	mp3Data := createMinimalMP3()
+	if err := os.WriteFile(testFile, mp3Data, 0o644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	// Video with no thumbnails - should use fallback URL
+	video := &youtube.Video{
+		ID:    "dQw4w9WgXcQ",
+		Title: "Test Video",
+		Author: youtube.Author{
+			Name: "Test Channel",
+		},
+		Thumbnails: []youtube.Thumbnail{}, // Empty thumbnails
+	}
+
+	injector := NewTagInjector()
+
+	// Inject thumbnail - should use fallback hqdefault URL
+	err := injector.InjectThumbnail(testFile, video)
+	if err != nil {
+		t.Fatalf("InjectThumbnail failed: %v", err)
+	}
+
+	// Verify thumbnail was embedded
+	hasThumbnail, err := HasEmbeddedThumbnail(testFile)
+	if err != nil {
+		t.Fatalf("HasEmbeddedThumbnail failed: %v", err)
+	}
+	if !hasThumbnail {
+		t.Error("Expected thumbnail to be embedded using fallback URL")
+	}
+}
+
+func TestGetThumbnailURL_SelectsHighestQualityJPG(t *testing.T) {
+	thumbnails := []youtube.Thumbnail{
+		{URL: "https://i.ytimg.com/vi/abc/sddefault.jpg", Width: 640, Height: 480},
+		{URL: "https://i.ytimg.com/vi/abc/maxresdefault.jpg", Width: 1280, Height: 720},
+		{URL: "https://i.ytimg.com/vi/abc/hqdefault.jpg", Width: 480, Height: 360},
+	}
+
+	url := GetThumbnailURL("abc", thumbnails)
+	if url != "https://i.ytimg.com/vi/abc/maxresdefault.jpg" {
+		t.Errorf("Expected maxresdefault URL, got %s", url)
+	}
+}
+
+func TestGetThumbnailURL_UsesFallbackForEmptyList(t *testing.T) {
+	url := GetThumbnailURL("test123", []youtube.Thumbnail{})
+	expected := "https://i.ytimg.com/vi/test123/hqdefault.jpg"
+	if url != expected {
+		t.Errorf("Expected fallback URL %s, got %s", expected, url)
+	}
+}
+
 // createMinimalMP3 creates a minimal valid MP3 file with ID3v2 header.
 func createMinimalMP3() []byte {
 	// ID3v2.3 header (10 bytes) + padding
