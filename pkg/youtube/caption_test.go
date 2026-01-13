@@ -1,6 +1,10 @@
 package youtube
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -239,5 +243,214 @@ func TestPlayerResponse_ExtractCaptionManifest_NoCaptions(t *testing.T) {
 	manifest := pr.ExtractCaptionManifest()
 	if manifest.HasCaptions() {
 		t.Error("Expected manifest to have no captions")
+	}
+}
+
+func TestParseCaptionXML(t *testing.T) {
+	xmlData := []byte(`<?xml version="1.0" encoding="utf-8"?>
+<transcript>
+	<text start="0.5" dur="2.5">Hello, world!</text>
+	<text start="3.0" dur="1.5">This is a test.</text>
+	<text start="5.0" dur="3.0">Testing &amp; HTML entities &lt;here&gt;</text>
+</transcript>`)
+
+	data, err := ParseCaptionXML(xmlData)
+	if err != nil {
+		t.Fatalf("ParseCaptionXML failed: %v", err)
+	}
+
+	if len(data.Lines) != 3 {
+		t.Fatalf("Expected 3 lines, got %d", len(data.Lines))
+	}
+
+	// Check first line
+	if data.Lines[0].Start != 0.5 {
+		t.Errorf("Line 0 start = %v, want 0.5", data.Lines[0].Start)
+	}
+	if data.Lines[0].Duration != 2.5 {
+		t.Errorf("Line 0 duration = %v, want 2.5", data.Lines[0].Duration)
+	}
+	if data.Lines[0].Text != "Hello, world!" {
+		t.Errorf("Line 0 text = %q, want %q", data.Lines[0].Text, "Hello, world!")
+	}
+
+	// Check HTML entity decoding
+	if data.Lines[2].Text != "Testing & HTML entities <here>" {
+		t.Errorf("Line 2 text = %q, want %q", data.Lines[2].Text, "Testing & HTML entities <here>")
+	}
+}
+
+func TestParseCaptionXML_DefaultDuration(t *testing.T) {
+	xmlData := []byte(`<?xml version="1.0" encoding="utf-8"?>
+<transcript>
+	<text start="0.0">No duration specified</text>
+</transcript>`)
+
+	data, err := ParseCaptionXML(xmlData)
+	if err != nil {
+		t.Fatalf("ParseCaptionXML failed: %v", err)
+	}
+
+	if len(data.Lines) != 1 {
+		t.Fatalf("Expected 1 line, got %d", len(data.Lines))
+	}
+
+	// Should default to 2.0 seconds
+	if data.Lines[0].Duration != 2.0 {
+		t.Errorf("Duration = %v, want 2.0 (default)", data.Lines[0].Duration)
+	}
+}
+
+func TestCaptionLine_End(t *testing.T) {
+	line := CaptionLine{Start: 1.5, Duration: 2.5}
+	if line.End() != 4.0 {
+		t.Errorf("End() = %v, want 4.0", line.End())
+	}
+}
+
+func TestCaptionData_ToSRT(t *testing.T) {
+	data := &CaptionData{
+		Lines: []CaptionLine{
+			{Start: 0, Duration: 2, Text: "First line"},
+			{Start: 3, Duration: 2.5, Text: "Second line"},
+			{Start: 3661.5, Duration: 1.234, Text: "After an hour"}, // 1:01:01.500
+		},
+	}
+
+	srt := data.ToSRT()
+
+	// Check SRT format
+	if !strings.Contains(srt, "1\n00:00:00,000 --> 00:00:02,000\nFirst line") {
+		t.Errorf("SRT missing first line, got:\n%s", srt)
+	}
+	if !strings.Contains(srt, "2\n00:00:03,000 --> 00:00:05,500\nSecond line") {
+		t.Errorf("SRT missing second line, got:\n%s", srt)
+	}
+	if !strings.Contains(srt, "3\n01:01:01,500 --> 01:01:02,733\nAfter an hour") {
+		t.Errorf("SRT missing third line (hour test), got:\n%s", srt)
+	}
+}
+
+func TestCaptionData_ToVTT(t *testing.T) {
+	data := &CaptionData{
+		Lines: []CaptionLine{
+			{Start: 0, Duration: 2, Text: "First line"},
+			{Start: 3, Duration: 2.5, Text: "Second line"},
+		},
+	}
+
+	vtt := data.ToVTT()
+
+	// Check VTT header
+	if !strings.HasPrefix(vtt, "WEBVTT\n\n") {
+		t.Errorf("VTT missing header, got:\n%s", vtt)
+	}
+
+	// Check VTT format (uses . instead of , for milliseconds)
+	if !strings.Contains(vtt, "1\n00:00:00.000 --> 00:00:02.000\nFirst line") {
+		t.Errorf("VTT missing first line, got:\n%s", vtt)
+	}
+	if !strings.Contains(vtt, "2\n00:00:03.000 --> 00:00:05.500\nSecond line") {
+		t.Errorf("VTT missing second line, got:\n%s", vtt)
+	}
+}
+
+func TestCaptionDownloader_Download(t *testing.T) {
+	// Create a test server that returns caption XML
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/xml")
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="utf-8"?>
+<transcript>
+	<text start="0" dur="2">Hello from test server</text>
+</transcript>`))
+	}))
+	defer server.Close()
+
+	downloader := NewCaptionDownloader(server.Client())
+	track := &CaptionTrack{URL: server.URL}
+
+	data, err := downloader.Download(context.Background(), track)
+	if err != nil {
+		t.Fatalf("Download failed: %v", err)
+	}
+
+	if len(data.Lines) != 1 {
+		t.Fatalf("Expected 1 line, got %d", len(data.Lines))
+	}
+	if data.Lines[0].Text != "Hello from test server" {
+		t.Errorf("Text = %q, want %q", data.Lines[0].Text, "Hello from test server")
+	}
+}
+
+func TestCaptionDownloader_Download_EmptyTrack(t *testing.T) {
+	downloader := NewCaptionDownloader(nil)
+
+	_, err := downloader.Download(context.Background(), nil)
+	if err == nil {
+		t.Error("Expected error for nil track")
+	}
+
+	_, err = downloader.Download(context.Background(), &CaptionTrack{})
+	if err == nil {
+		t.Error("Expected error for empty URL")
+	}
+}
+
+func TestCaptionDownloader_Download_HTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	downloader := NewCaptionDownloader(server.Client())
+	track := &CaptionTrack{URL: server.URL}
+
+	_, err := downloader.Download(context.Background(), track)
+	if err == nil {
+		t.Error("Expected error for 404 response")
+	}
+	if !strings.Contains(err.Error(), "404") {
+		t.Errorf("Error should mention status code, got: %v", err)
+	}
+}
+
+func TestCaptionDownloader_DownloadAsSRT(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<transcript><text start="0" dur="2">Test</text></transcript>`))
+	}))
+	defer server.Close()
+
+	downloader := NewCaptionDownloader(server.Client())
+	track := &CaptionTrack{URL: server.URL}
+
+	srt, err := downloader.DownloadAsSRT(context.Background(), track)
+	if err != nil {
+		t.Fatalf("DownloadAsSRT failed: %v", err)
+	}
+
+	if !strings.Contains(srt, "00:00:00,000 --> 00:00:02,000") {
+		t.Errorf("Expected SRT format, got:\n%s", srt)
+	}
+}
+
+func TestCaptionDownloader_DownloadAsVTT(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<transcript><text start="0" dur="2">Test</text></transcript>`))
+	}))
+	defer server.Close()
+
+	downloader := NewCaptionDownloader(server.Client())
+	track := &CaptionTrack{URL: server.URL}
+
+	vtt, err := downloader.DownloadAsVTT(context.Background(), track)
+	if err != nil {
+		t.Fatalf("DownloadAsVTT failed: %v", err)
+	}
+
+	if !strings.HasPrefix(vtt, "WEBVTT") {
+		t.Errorf("Expected VTT format, got:\n%s", vtt)
+	}
+	if !strings.Contains(vtt, "00:00:00.000 --> 00:00:02.000") {
+		t.Errorf("Expected VTT timestamps, got:\n%s", vtt)
 	}
 }
