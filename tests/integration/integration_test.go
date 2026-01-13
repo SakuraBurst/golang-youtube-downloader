@@ -11,6 +11,8 @@ import (
 	"time"
 
 	ythttp "github.com/SakuraBurst/golang-youtube-downloader/internal/http"
+	"github.com/SakuraBurst/golang-youtube-downloader/pkg/download"
+	"github.com/SakuraBurst/golang-youtube-downloader/pkg/ffmpeg"
 	"github.com/SakuraBurst/golang-youtube-downloader/pkg/youtube"
 )
 
@@ -170,6 +172,71 @@ func AssertStreamManifestValid(t *testing.T, manifest *youtube.StreamManifest) {
 	totalStreams := len(manifest.VideoStreams) + len(manifest.AudioStreams) + len(manifest.MuxedStreams)
 	if totalStreams == 0 {
 		t.Error("Stream manifest should have at least one stream")
+	}
+}
+
+// SkipIfNoFFmpeg skips the test if FFmpeg is not available.
+func SkipIfNoFFmpeg(t *testing.T) {
+	t.Helper()
+	if !ffmpeg.IsAvailable() {
+		t.Skip("Skipping test: FFmpeg not available")
+	}
+}
+
+// FindStreamWithDirectURL finds a video stream with a direct URL (no signature cipher).
+func FindStreamWithDirectURL(manifest *youtube.StreamManifest) *youtube.VideoStreamInfo {
+	for i := range manifest.VideoStreams {
+		if manifest.VideoStreams[i].URL != "" {
+			return &manifest.VideoStreams[i]
+		}
+	}
+	return nil
+}
+
+// FindAudioStreamWithDirectURL finds an audio stream with a direct URL.
+func FindAudioStreamWithDirectURL(manifest *youtube.StreamManifest) *youtube.AudioStreamInfo {
+	for i := range manifest.AudioStreams {
+		if manifest.AudioStreams[i].URL != "" {
+			return &manifest.AudioStreams[i]
+		}
+	}
+	return nil
+}
+
+// FindMuxedStreamWithDirectURL finds a muxed stream with a direct URL.
+func FindMuxedStreamWithDirectURL(manifest *youtube.StreamManifest) *youtube.MuxedStreamInfo {
+	for i := range manifest.MuxedStreams {
+		if manifest.MuxedStreams[i].VideoStreamInfo.URL != "" {
+			return &manifest.MuxedStreams[i]
+		}
+	}
+	return nil
+}
+
+// AssertFileExists verifies that a file exists and has non-zero size.
+func AssertFileExists(t *testing.T, path string) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		t.Fatalf("Expected file to exist: %s", path)
+	}
+	if err != nil {
+		t.Fatalf("Error checking file: %v", err)
+	}
+	if info.Size() == 0 {
+		t.Errorf("Expected file to have non-zero size: %s", path)
+	}
+}
+
+// AssertFileMinSize verifies that a file exists and has at least minSize bytes.
+func AssertFileMinSize(t *testing.T, path string, minSize int64) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Error checking file %s: %v", path, err)
+	}
+	if info.Size() < minSize {
+		t.Errorf("File %s is too small: %d bytes (expected at least %d)", path, info.Size(), minSize)
 	}
 }
 
@@ -535,4 +602,183 @@ func TestIntegration_FetchVideoMetadata(t *testing.T) {
 	t.Logf("  Channel ID: %s", video.Author.ChannelID)
 	t.Logf("  Thumbnails: %d", len(video.Thumbnails))
 	t.Logf("  Description length: %d chars", len(video.Description))
+}
+
+// TestIntegration_DownloadMuxedStream tests downloading a muxed stream (video+audio).
+// This is the simplest download test as it doesn't require FFmpeg for muxing.
+func TestIntegration_DownloadMuxedStream(t *testing.T) {
+	SkipIfNoIntegration(t)
+
+	fixtures := DefaultFixtures()
+	ctx, cancel := NewTestContext(t)
+	defer cancel()
+
+	tc := NewTestClient(t)
+	_, manifest := tc.FetchVideoWithStreams(ctx, t, fixtures.VideoID)
+
+	// Find a muxed stream with direct URL
+	muxedStream := FindMuxedStreamWithDirectURL(manifest)
+	if muxedStream == nil {
+		t.Skip("No muxed streams with direct URLs available (signature cipher required)")
+	}
+
+	// Download the muxed stream
+	outputPath := TempFile(t, "video.mp4")
+	downloader := download.NewDownloader(tc.Client)
+
+	var progressUpdates int
+	progressCallback := func(p download.Progress) {
+		progressUpdates++
+	}
+
+	t.Logf("Downloading muxed stream: %s (%s)", muxedStream.VideoStreamInfo.Quality, muxedStream.VideoStreamInfo.Container)
+	err := downloader.DownloadStream(ctx, muxedStream.VideoStreamInfo.URL, outputPath, progressCallback)
+	RequireNoError(t, err, "Failed to download stream")
+
+	// Verify file was created
+	AssertFileExists(t, outputPath)
+
+	// Verify progress was reported
+	if progressUpdates == 0 {
+		t.Error("Expected progress updates during download")
+	}
+
+	info, _ := os.Stat(outputPath)
+	t.Logf("Downloaded %d bytes to %s (%d progress updates)", info.Size(), outputPath, progressUpdates)
+}
+
+// TestIntegration_DownloadAndMuxWithFFmpeg tests the full download and mux flow.
+// Downloads separate video and audio streams, then muxes them with FFmpeg.
+func TestIntegration_DownloadAndMuxWithFFmpeg(t *testing.T) {
+	SkipIfNoIntegration(t)
+	SkipIfNoFFmpeg(t)
+
+	fixtures := DefaultFixtures()
+	ctx, cancel := NewTestContext(t)
+	defer cancel()
+
+	tc := NewTestClient(t)
+	video, manifest := tc.FetchVideoWithStreams(ctx, t, fixtures.VideoID)
+
+	// Find video and audio streams with direct URLs
+	videoStream := FindStreamWithDirectURL(manifest)
+	audioStream := FindAudioStreamWithDirectURL(manifest)
+
+	if videoStream == nil && audioStream == nil {
+		// Try falling back to muxed stream
+		muxedStream := FindMuxedStreamWithDirectURL(manifest)
+		if muxedStream != nil {
+			t.Skip("Only muxed streams available - no separate video+audio for muxing test")
+		}
+		t.Skip("No streams with direct URLs available (signature cipher required)")
+	}
+
+	if videoStream == nil {
+		t.Skip("No video streams with direct URLs available")
+	}
+	if audioStream == nil {
+		t.Skip("No audio streams with direct URLs available")
+	}
+
+	// Create temp directory for downloads
+	tempDir := TempDir(t)
+	videoPath := filepath.Join(tempDir, "video.mp4")
+	audioPath := filepath.Join(tempDir, "audio.m4a")
+	outputPath := filepath.Join(tempDir, "output.mp4")
+
+	downloader := download.NewDownloader(tc.Client)
+
+	// Download video stream
+	t.Logf("Downloading video stream: %s (%dx%d)", videoStream.Quality, videoStream.Width, videoStream.Height)
+	err := downloader.DownloadStream(ctx, videoStream.URL, videoPath, nil)
+	RequireNoError(t, err, "Failed to download video stream")
+	AssertFileExists(t, videoPath)
+
+	// Download audio stream
+	t.Logf("Downloading audio stream: %s (%d Hz)", audioStream.AudioCodec, audioStream.SampleRate)
+	err = downloader.DownloadStream(ctx, audioStream.URL, audioPath, nil)
+	RequireNoError(t, err, "Failed to download audio stream")
+	AssertFileExists(t, audioPath)
+
+	// Mux streams with FFmpeg
+	t.Log("Muxing video and audio streams with FFmpeg")
+	err = ffmpeg.MuxStreamsWithContext(ctx, videoPath, audioPath, outputPath)
+	RequireNoError(t, err, "Failed to mux streams")
+
+	// Verify output file
+	AssertFileExists(t, outputPath)
+
+	videoInfo, _ := os.Stat(videoPath)
+	audioInfo, _ := os.Stat(audioPath)
+	outputInfo, _ := os.Stat(outputPath)
+
+	t.Logf("Download and mux complete for %q:", video.Title)
+	t.Logf("  Video: %d bytes", videoInfo.Size())
+	t.Logf("  Audio: %d bytes", audioInfo.Size())
+	t.Logf("  Output: %d bytes", outputInfo.Size())
+}
+
+// TestIntegration_DownloadStreamsParallel tests downloading multiple streams in parallel.
+func TestIntegration_DownloadStreamsParallel(t *testing.T) {
+	SkipIfNoIntegration(t)
+
+	fixtures := DefaultFixtures()
+	ctx, cancel := NewTestContext(t)
+	defer cancel()
+
+	tc := NewTestClient(t)
+	_, manifest := tc.FetchVideoWithStreams(ctx, t, fixtures.VideoID)
+
+	// Find video and audio streams with direct URLs
+	videoStream := FindStreamWithDirectURL(manifest)
+	audioStream := FindAudioStreamWithDirectURL(manifest)
+
+	if videoStream == nil || audioStream == nil {
+		t.Skip("Both video and audio streams with direct URLs required for parallel test")
+	}
+
+	// Create temp directory for downloads
+	tempDir := TempDir(t)
+	videoPath := filepath.Join(tempDir, "video.mp4")
+	audioPath := filepath.Join(tempDir, "audio.m4a")
+
+	downloader := download.NewDownloader(tc.Client)
+
+	// Download both streams in parallel
+	streams := []download.StreamDownload{
+		{URL: videoStream.URL, FilePath: videoPath},
+		{URL: audioStream.URL, FilePath: audioPath},
+	}
+
+	var progressUpdates int
+	progressCallback := func(p download.Progress) {
+		progressUpdates++
+	}
+
+	t.Log("Downloading video and audio streams in parallel")
+	results := downloader.DownloadStreamsParallel(ctx, streams, progressCallback)
+
+	// Verify both downloads succeeded
+	if len(results) != 2 {
+		t.Fatalf("Expected 2 results, got %d", len(results))
+	}
+
+	for i, result := range results {
+		if result.Error != nil {
+			t.Errorf("Stream %d download failed: %v", i, result.Error)
+		}
+	}
+
+	AssertFileExists(t, videoPath)
+	AssertFileExists(t, audioPath)
+
+	// Verify progress was reported
+	if progressUpdates == 0 {
+		t.Error("Expected progress updates during parallel download")
+	}
+
+	videoInfo, _ := os.Stat(videoPath)
+	audioInfo, _ := os.Stat(audioPath)
+	t.Logf("Parallel download complete: video=%d bytes, audio=%d bytes (%d progress updates)",
+		videoInfo.Size(), audioInfo.Size(), progressUpdates)
 }
